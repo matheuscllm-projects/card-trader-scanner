@@ -1643,6 +1643,16 @@ class PokemonTcgIoProvider(PricingProvider):
         self.cache = cache
         self.delay = delay
         self._last_call = 0.0
+        self.retry_5xx = 0          # B1e: retries por 429/5xx neste run (resumo)
+
+    def probe(self, timeout: float = 5.0) -> bool:
+        """B1e: sonda BARATA de saúde — 1 chamada, sem retry, sem backoff. True = HTTP 200."""
+        try:
+            r = self.session.get(f"{POKEMONTCG_BASE}/cards",
+                                 params={"pageSize": 1, "select": "id"}, timeout=timeout)
+            return r.status_code == 200
+        except requests.RequestException:
+            return False
 
     def _rate_limit(self):
         elapsed = time.time() - self._last_call
@@ -1678,6 +1688,7 @@ class PokemonTcgIoProvider(PricingProvider):
                 return r
             last_status = r.status_code
             if r.status_code == 429 or 500 <= r.status_code < 600:
+                self.retry_5xx = getattr(self, "retry_5xx", 0) + 1
                 # Transiente: respeita Retry-After (429) ou backoff exponencial.
                 try:
                     retry_after = int(r.headers.get("Retry-After", "0"))
@@ -3183,6 +3194,67 @@ class CheckpointWriter:
             self._fh = None
 
 
+class SourceBreaker:
+    """B1e: disjuntor da fonte principal de preço, medido POR OFERTA dentro do run.
+
+    Janela deslizante das últimas `window` ofertas (ok/falha de infraestrutura + latência).
+    Abre quando, com ≥ `min_samples` na janela, a taxa de falha >= `fail_rate` OU a latência
+    média > `slow_s`. Aberto: o resto do set e os sets seguintes vão direto ao tcgcsv (mesma
+    regra exata de casamento); a cada `probe_every_s` uma sonda barata decide se volta."""
+
+    def __init__(self, window: int = 10, min_samples: int = 6, fail_rate: float = 0.5,
+                 slow_s: float = 15.0, probe_every_s: float = 120.0, clock=time.monotonic):
+        self.window, self.min_samples = window, min_samples
+        self.fail_rate, self.slow_s, self.probe_every_s = fail_rate, slow_s, probe_every_s
+        self._clock = clock
+        self._w: list = []
+        self.is_open = False
+        self.opened_at: Optional[datetime] = None
+        self.open_fail, self.open_n = 0, 0
+        self._last_probe: Optional[float] = None
+        self.events: list[dict] = []          # aberturas/fechamentos do run (para o resumo)
+
+    @property
+    def fail_count(self) -> int:
+        return self.open_fail if self.is_open else sum(1 for ok, _ in self._w if not ok)
+
+    @property
+    def sample_count(self) -> int:
+        return self.open_n if self.is_open else len(self._w)
+
+    def record(self, ok: bool, latency_s: float) -> bool:
+        """Registra uma oferta; devolve True se ESTA chamada abriu o disjuntor."""
+        if self.is_open:
+            return False
+        self._w.append((bool(ok), float(latency_s)))
+        del self._w[:-self.window]
+        n = len(self._w)
+        if n < self.min_samples:
+            return False
+        fails = sum(1 for o, _ in self._w if not o)
+        slow = sum(lat for _, lat in self._w) / n > self.slow_s
+        if fails / n >= self.fail_rate or slow:
+            self.is_open, self.opened_at = True, datetime.now()
+            self.open_fail, self.open_n = fails, n
+            self._last_probe = self._clock()
+            self.events.append({"event": "open", "at": self.opened_at, "fails": fails, "n": n,
+                                "why": "latência" if slow and fails / n < self.fail_rate else "falhas"})
+            return True
+        return False
+
+    def probe_due(self) -> bool:
+        return self.is_open and (self._last_probe is None
+                                 or self._clock() - self._last_probe >= self.probe_every_s)
+
+    def mark_probe(self) -> None:
+        self._last_probe = self._clock()
+
+    def close(self) -> None:
+        self.is_open = False
+        self._w.clear()
+        self.events.append({"event": "close", "at": datetime.now()})
+
+
 class Scanner:
     # v2.29: default de classe = inglês. Explícito (não `getattr` nos call-sites)
     # e ainda tolera stubs `Scanner.__new__` dos testes antigos.
@@ -3672,6 +3744,9 @@ class Scanner:
         nem pelo resgate) e o resgate NÃO falhou."""
         handled: set = set()
         rescue_status = None
+        # B1e: a fonte principal falhou neste set? (só para a nota; o DESFECHO vem da cobertura final)
+        primary_failed = abort_kind in ("operational", "breaker") or any(
+            causes.get(l.uid) == "failure" for l in pending)
         if pending and self._tcgcsv_can_fallback():
             opps, handled, rescue_status = self._rescue_via_tcgcsv(exp_code, exp_name, pending)
             yield from opps
@@ -3702,11 +3777,23 @@ class Scanner:
         noref_uids = self.__dict__.setdefault("_noref_uids", set())
         left = [l for l in pending if l.uid not in handled and l.uid not in noref_uids]
         rescued = len(handled)
+        prim = self._primary_name()
+        self._set_by_source = ({"tcgcsv": hits + rescued} if prim == "tcgcsv"
+                               else {prim: hits, "tcgcsv": rescued})
         if rescued:
             self._set_note = f"tcgcsv_rescue_priced_{rescued}_of_{len(pending)}"
+        if primary_failed:
+            extra = (f"fonte principal falhou, atendido pelo tcgcsv: {prim} {hits} + "
+                     f"tcgcsv {rescued} precificadas")
+            self._set_note = f"{self._set_note}; {extra}" if self._set_note else extra
+        if self.__dict__.get("_set_breaker_note"):
+            self._set_note = f"{self._set_note}; {self._set_breaker_note}" if self._set_note else self._set_breaker_note
         fail_left = [l for l in left if causes.get(l.uid) == "failure"]
+        nr_left = [l for l in left if causes.get(l.uid, "not_reached") == "not_reached"]
         priced_total = hits + rescued
-        if abort_kind == "operational":
+        # B1e: o desfecho reflete a cobertura FINAL. Falha operacional só quando sobra oferta SEM
+        # resposta válida de nenhuma fonte (falha operacional ou não alcançada).
+        if abort_kind == "operational" and (fail_left or nr_left):
             status, reason = "operational_failure", abort_reason
         elif left and rescue_status == "fetch_failed":
             # o resgate não pôde rodar: não dá pra afirmar ausência de cobertura
@@ -3715,10 +3802,9 @@ class Scanner:
             status, reason = "operational_failure", f"pricing_failures_{len(fail_left)}_unrescued"
         elif not left:
             status, reason = "complete", None
-        elif priced_total > 0 and any(causes.get(l.uid, "not_reached") == "not_reached" for l in left):
+        elif nr_left and (priced_total > 0 or abort_kind in ("operational", "breaker")):
             # B1b: o set NÃO foi avaliado por inteiro — não é "completo": tentar de novo
-            n_nr = sum(1 for l in left if causes.get(l.uid, "not_reached") == "not_reached")
-            status, reason = "operational_failure", f"coverage_interrupted_{n_nr}_not_reached"
+            status, reason = "operational_failure", f"coverage_interrupted_{len(nr_left)}_not_reached"
         elif priced_total == 0:
             status = "no_coverage"
             reason = abort_reason or f"{len(left)}_of_{total}_without_reference"
@@ -3752,6 +3838,8 @@ class Scanner:
         self._set_unpriced: int = 0
         self._set_total: int = 0
         self._set_note: Optional[str] = None
+        self._set_by_source: dict = {}
+        self._set_breaker_note: Optional[str] = None
         self._set_all: list = []
         self._set_accounted: set = set()
         log.info(f"→ Scan: {exp_name} ({exp_code}) [id={exp_id}]")
@@ -3882,6 +3970,31 @@ class Scanner:
                         abort_reason="tcgcsv_primary_no_group_id")
                 return
 
+        # B1e: disjuntor aberto → o set começa pelo tcgcsv; sonda barata decide se a fonte voltou.
+        brk = self._active_breaker() if all_listings else None
+        if brk is not None and brk.is_open:
+            if brk.probe_due():
+                brk.mark_probe()
+                probe = getattr(self.pricing, "probe", None)
+                try:
+                    healthy = bool(probe()) if callable(probe) else True
+                except Exception:  # noqa: BLE001
+                    healthy = False
+                if healthy:
+                    brk.close()
+                    log.info(f"  🟢 {self._primary_name()} respondeu à sonda — disjuntor fechado, "
+                             f"voltando à fonte principal em {exp_code}")
+            if brk.is_open:
+                self.__dict__.setdefault("_breaker_sets", set()).add(exp_code)
+                self._set_breaker_note = ("disjuntor aberto (fonte principal degradada): set atendido "
+                                          "direto pelo tcgcsv")
+                log.warning(f"  🔌 {exp_code}: fonte principal degradada (disjuntor aberto) — set vai "
+                            f"direto ao tcgcsv (mesma regra exata de edição e acabamento)")
+                yield from self._conclude_set(
+                    exp_code, exp_name, all_listings, {}, len(all_listings), 0,
+                    abort_kind="breaker", abort_reason="source_breaker_open")
+                return
+
         # Para cada listing filtrado, busca preço TCG e calcula margem
         total_listings = len(all_listings)
         # v2.9 (Codex H5): contadores per-set pra detectar mass pricing failure
@@ -3937,6 +4050,8 @@ class Scanner:
             set_pricing_attempts += 1
             tcg_market = None
             failed = False
+            infra_fail = False
+            _t0 = time.monotonic()
             try:
                 tcg_market = self.pricing.market_price_usd(
                     l.card_name, l.set_code, l.collector_number,
@@ -3952,6 +4067,7 @@ class Scanner:
                 set_pricing_failures += 1
                 self.stats["pricing_failures"] += 1
                 failed = True
+                infra_fail = True
             except Exception as e:
                 # v2.9 (Codex H5): erros DESCONHECIDOS = WARNING + counter.
                 # Pre-fix: log.debug + swallow → schema drift / SSL / JSON parse
@@ -3963,6 +4079,8 @@ class Scanner:
                 set_pricing_failures += 1
                 self.stats["pricing_failures"] += 1
                 failed = True
+            breaker_opened = (brk.record(not infra_fail, time.monotonic() - _t0)
+                              if brk is not None else False)
             # Lote 3b: a falha em massa é avaliada DEPOIS de contabilizar o listing
             # atual (hit/miss/falha) — antes ela abortava antes de registrar um
             # listing já precificado e a linha sumia.
@@ -4015,6 +4133,18 @@ class Scanner:
                 else:
                     self._set_accounted.add(l.uid)   # descartada por filtro explícito
 
+            if breaker_opened:
+                self.__dict__.setdefault("_breaker_sets", set()).add(exp_code)
+                self._set_breaker_note = (f"disjuntor aberto às {brk.opened_at:%H:%M} após "
+                                          f"{brk.fail_count} falhas em {brk.sample_count} ofertas")
+                log.warning(f"  🔌 {self._primary_name()} DEGRADADA em {exp_code} após {i} oferta(s): "
+                            f"{brk.fail_count} falhas em {brk.sample_count} — o restante do set vai "
+                            f"direto ao tcgcsv (lote, mesma regra exata); sem skip-list")
+                yield from self._conclude_set(
+                    exp_code, exp_name, _pending(i), causes, total_listings, set_tcg_hits,
+                    abort_kind="breaker",
+                    abort_reason=f"source_breaker_open_at_{i}_of_{total_listings}")
+                return
             # v2.9: mass pricing failure → falha OPERACIONAL do set (nunca skip-list).
             if mass_failure:
                 fail_pct = set_pricing_failures / set_pricing_attempts * 100
@@ -4163,6 +4293,19 @@ class Scanner:
             return ct_variants.ED_NONE
         return ct_variants.ED_UNL
 
+    def _primary_name(self) -> str:
+        n = getattr(getattr(self, "pricing", None), "name", None)
+        return n if isinstance(n, str) and n else "pokemontcg"
+
+    def _active_breaker(self) -> Optional["SourceBreaker"]:
+        """B1e: o disjuntor só existe quando há para onde desviar (tcgcsv de resgate habilitado e
+        fonte principal ≠ tcgcsv). `scanner.breaker = None` desliga."""
+        if not self._tcgcsv_can_fallback() or self.pricing is self.tcgcsv:
+            return None
+        if "breaker" not in self.__dict__:
+            self.breaker = SourceBreaker()
+        return self.breaker
+
     def _tcgcsv_can_fallback(self) -> bool:
         """v2.23: True se o fallback tcgcsv está habilitado E disponível.
 
@@ -4263,6 +4406,7 @@ class Scanner:
             self._noref_uids = set()
             self._noref_first = {}
             self._infra_failed = {}
+            self._set_by_source, self._set_breaker_note = {}, None
             try:
                 # v2.6: itera o generator e escreve cada Opportunity no checkpoint
                 # ASSIM QUE for yielded. Antes era `opps.extend(scan_expansion(exp))`
@@ -4310,6 +4454,8 @@ class Scanner:
                 "unpriced": self._set_unpriced, "total": self._set_total,
                 "note": self._set_note,
                 "noref": sum(1 for r in self.noref_rows if r["set"] == exp_code),
+                "elapsed_s": round(time.monotonic() - set_start, 1),
+                "by_source": dict(self._set_by_source or {}),
             })
             # v2.6: emite set_complete (agora para TODO desfecho) com DIFFs
             if checkpoint and checkpoint.enabled and stats_pre is not None:
@@ -4358,11 +4504,31 @@ class Scanner:
             "; ".join(f"{o['set']}: {o['unpriced']}/{o['total']} sem preço" for o in cu)
             or "(nenhum)")
         self.stats["listings_sem_preco"] = len(self.unpriced_rows)
+        self.stats["saude_fonte_principal"] = self._source_health_line() or ""
         for line in self.run_summary_lines():
             log.warning(line) if ("tentar de novo" in line) else log.info(line)
         # Ordena por margem bruta desc (maior oportunidade primeiro)
         opps.sort(key=lambda o: o.margin_pct, reverse=True)
         return opps
+
+    def _source_health_line(self) -> Optional[str]:
+        """B1e: frase de saúde da fonte principal (None quando não há disjuntor ativo no run)."""
+        brk = self.__dict__.get("breaker")
+        if brk is None:
+            return None
+        opens = [e for e in brk.events if e["event"] == "open"]
+        if not opens:
+            return "pokemontcg.io saudável neste run (disjuntor não abriu)"
+        parts = []
+        for k, e in enumerate(brk.events):
+            if e["event"] == "open":
+                parts.append(f"pokemontcg.io degradada às {e['at']:%H:%M} após {e['fails']} falhas "
+                             f"em {e['n']}")
+            else:
+                parts.append(f"voltou às {e['at']:%H:%M}")
+        k = len(self.__dict__.get("_breaker_sets", ()))
+        tail = (f"{k} set atendido pelo tcgcsv" if k == 1 else f"{k} sets atendidos pelo tcgcsv")
+        return "; ".join(parts) + "; " + tail
 
     def run_summary_lines(self) -> list[str]:
         """Resumo do run pelos QUATRO desfechos (Lote 3b): completo · completo com
@@ -4392,6 +4558,27 @@ class Scanner:
             if low:
                 lines.append("⚠️ ABAIXO DE METADE precificada (cobertura fraca — conferir antes de confiar): " +
                              ", ".join(f"{o['set']} ({o['total'] - o['unpriced']}/{o['total']})" for o in low))
+        by: dict = {}
+        for o in outs:
+            for k, v in (o.get("by_source") or {}).items():
+                by[k] = by.get(k, 0) + v
+        if by:
+            lines.append("Preços por fonte: " + " | ".join(f"{k} {v}" for k, v in by.items()))
+        r5 = getattr(getattr(self, "pricing", None), "retry_5xx", None)
+        if isinstance(r5, int):
+            lines.append(f"{r5} retries por 5xx/429 da pokemontcg.io neste run")
+        resc = [o for o in outs if (o.get("by_source") or {}).get("tcgcsv", 0) > 0
+                and o.get("by_source", {}).get(self._primary_name(), 0) >= 0
+                and self._primary_name() != "tcgcsv"]
+        if resc:
+            lines.append("Sets atendidos por resgate (tcgcsv): " +
+                         ", ".join(f"{o['set']} ({o['by_source']['tcgcsv']})" for o in resc))
+        if outs and any("elapsed_s" in o for o in outs):
+            lines.append("Tempo por set: " + " | ".join(
+                f"{o['set']} {o.get('elapsed_s', 0) / 60:.1f} min" for o in outs if "elapsed_s" in o))
+        health = self._source_health_line()
+        if health:
+            lines.append(health)
         n = len(getattr(self, "unpriced_rows", []))
         if n:
             lines.append(f"{n} listings sem preço — ver aba 'Sem preço' do XLSX")
@@ -5024,6 +5211,16 @@ def parse_args():
                    help=(f"v2.4: wall-clock timeout per set (minutos). Default "
                          f"{DEFAULT_PER_SET_TIMEOUT_MIN}. Quando excedido durante pricing loop, "
                          f"set é abortado e adicionado à skip-list. 0 = desativado."))
+    p.add_argument("--no-source-breaker", action="store_true",
+                   help="B1e: desliga o disjuntor da fonte principal (pokemontcg.io → tcgcsv em lote).")
+    p.add_argument("--source-fail-rate", type=float, default=0.5,
+                   help="B1e: taxa de falha de infra (FRAÇÃO, janela recente) que abre o disjuntor. Default 0.5.")
+    p.add_argument("--source-slow-s", type=float, default=15.0,
+                   help="B1e: latência média (s, janela recente) que abre o disjuntor. Default 15.")
+    p.add_argument("--source-window", type=int, default=10,
+                   help="B1e: tamanho da janela (ofertas). Mínimo de amostras = 60%% da janela. Default 10.")
+    p.add_argument("--source-probe-s", type=float, default=120.0,
+                   help="B1e: de quantos em quantos segundos testar se a fonte voltou. Default 120.")
     p.add_argument("--ignore-skip-list", action="store_true",
                    help="v2.4: ignora scanner_skip_list.json (retenta sets que travaram em runs anteriores).")
     # v2.13 (frente chase cards): filtra pra raridades top.
@@ -5377,6 +5574,9 @@ def main():
         tcgcsv_fallback=tcgcsv_fallback_on,
         language=args.language,
     )
+    scanner.breaker = None if args.no_source_breaker else SourceBreaker(
+        window=max(2, args.source_window), min_samples=max(2, round(0.6 * max(2, args.source_window))),
+        fail_rate=args.source_fail_rate, slow_s=args.source_slow_s, probe_every_s=args.source_probe_s)
     if args.language.lower() != LANGUAGE_FILTER:
         log.warning(
             f"🌐 --language {args.language}: ofertas CT em '{args.language}', "
