@@ -1,5 +1,5 @@
 {
- "_source": "pokemontcg.io, pre\u00e7os market registrados na spec-estrutural.md secao 0.2 (2026-11-24); chaves reais, so os campos usados",
+ "_source": "Valores market de pokemontcg.io, chaves reais, so os campos usados. Cada carta tem 'origem' propria. NENHUM payload bruto foi guardado: pokemontcg.io devolveu HTTP 502 em 2026-11-24 ao tentar recapturar.",
  "cards": {
   "neo1-9": {
    "rarity": "Rare Holo",
@@ -11,7 +11,8 @@
     "unlimitedHolofoil": {
      "market": 534.65
     }
-   }
+   },
+   "origem": "spec-estrutural.md secao 0.2 ('Precos reais da pokemontcg.io usados como fixture (2026-11-24)'); valores transcritos pelo autor da spec, nao recapturados"
   },
   "neo1-56": {
    "rarity": "Common",
@@ -22,7 +23,8 @@
     "unlimited": {
      "market": 1.62
     }
-   }
+   },
+   "origem": "spec-estrutural.md secao 0.2 ('Precos reais da pokemontcg.io usados como fixture (2026-11-24)'); valores transcritos pelo autor da spec, nao recapturados"
   },
   "neo1-59": {
    "rarity": "Common",
@@ -33,7 +35,8 @@
     "unlimited": {
      "market": 0.81
     }
-   }
+   },
+   "origem": "spec-estrutural.md secao 0.2 ('Precos reais da pokemontcg.io usados como fixture (2026-11-24)'); valores transcritos pelo autor da spec, nao recapturados"
   },
   "ex12-56": {
    "rarity": "Common",
@@ -44,7 +47,8 @@
     "reverseHolofoil": {
      "market": 37.5
     }
-   }
+   },
+   "origem": "comentario do scanner: cardtrader_scanner.py linhas 1534-1537 e CHANGELOG.md linhas 237/254 (v2.24): 'pokemontcg.io ao vivo, 2026-06-26'; so os dois mercados citados; payload nao capturado; NAO vem da spec"
   },
   "ecard3-118": {
    "rarity": "Common",
@@ -55,7 +59,8 @@
     "reverseHolofoil": {
      "market": 104.99
     }
-   }
+   },
+   "origem": "comentario do scanner: cardtrader_scanner.py linhas 1534-1537 e CHANGELOG.md linhas 237/254 (v2.24): 'pokemontcg.io ao vivo, 2026-06-26'; so os dois mercados citados; payload nao capturado; NAO vem da spec"
   }
  }
 }

@@ -51,5 +51,18 @@ def test_rarity_vazia_sem_proxies_e_string_vazia():
     assert sc.classify_chase_tier(None) == ""
 
 
+def test_divergencia_conhecida_rarity_vazia_proxies_none():
+    """DIVERGENCIA DOCUMENTADA (nao e bug a corrigir aqui): raridade vazia e proxies None.
+
+    scanner antigo -> ""; postprocess antigo -> "MODEST"; ct_chase unificado segue o scanner.
+    """
+    assert sc.classify_chase_tier("") == ""
+    assert sc.classify_chase_tier(None) == ""
+    assert pp.classify_chase_tier("") == "MODEST"
+    assert pp.classify_chase_tier(None) == "MODEST"
+    assert ct_chase.classify_chase_tier("") == ""
+    assert ct_chase.classify_chase_tier(None) == ""
+
+
 def test_supranumerario_top():
     assert ct_chase.classify_chase_tier("", card_number="200/150") == "TOP"

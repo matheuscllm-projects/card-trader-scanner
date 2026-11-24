@@ -1,6 +1,9 @@
 """Chase tier unico (A3/D6). Copia fiel das regras antigas do scanner e do postprocess.
 
-Indicador informativo. Regra de unificacao: rarity vazia E sem proxies
+Indicador EXCLUSIVAMENTE INFORMATIVO (vintage e moderno): nunca entra em margem,
+corte ou decisao. Divergencia conhecida (travada em tests/test_ct_chase.py):
+rarity vazia + proxies None -> "" aqui e no scanner antigo; o postprocess antigo
+devolvia "MODEST". Regra de unificacao: rarity vazia E sem proxies
 (card_number e markup_tier None) -> "" (comportamento do scanner); com proxies,
 cai nos proxies do postprocess.
 """

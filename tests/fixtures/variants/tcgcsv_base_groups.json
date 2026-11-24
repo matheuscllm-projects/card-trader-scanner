@@ -1,0 +1,236 @@
+{
+ "_source": "tcgcsv.com (gratis, sem chave). Coletado em 2026-11-24 com GET em https://tcgcsv.com/tcgplayer/3/{groupId}/products e /prices para groupId em 604 (Base Set), 1663 (Base Set (Shadowless)), 1396 (Neo Genesis), 605 (Base Set 2), 635 (Jungle), 1372 (Skyridge), 1374 (Legendary Collection), 23473. Nomes de grupo: https://tcgcsv.com/tcgplayer/3/groups. Registros reais, recorte de 4 cartas por grupo (Base Set e Shadowless) + inventario completo de subTypeName.",
+ "_provider_ptcg": "pokemontcg.io base1: GET https://api.pokemontcg.io/v2/cards/base1-4 devolveu HTTP 502 ('error code: 502') em 2026-11-24; chaves ptcg do Base Set NAO verificadas.",
+ "cards": [
+  {
+   "groupId": 604,
+   "groupName": "Base Set",
+   "productId": 42346,
+   "name": "Alakazam",
+   "number": "001/102",
+   "rarity": "Holo Rare",
+   "prices": [
+    {
+     "subTypeName": "Holofoil",
+     "marketPrice": 76.39,
+     "lowPrice": 44.53
+    }
+   ]
+  },
+  {
+   "groupId": 604,
+   "groupName": "Base Set",
+   "productId": 42382,
+   "name": "Charizard",
+   "number": "004/102",
+   "rarity": "Holo Rare",
+   "prices": [
+    {
+     "subTypeName": "Holofoil",
+     "marketPrice": 1001.05,
+     "lowPrice": 480.0
+    }
+   ]
+  },
+  {
+   "groupId": 604,
+   "groupName": "Base Set",
+   "productId": 42386,
+   "name": "Abra",
+   "number": "043/102",
+   "rarity": "Common",
+   "prices": [
+    {
+     "subTypeName": "Normal",
+     "marketPrice": 1.86,
+     "lowPrice": 0.15
+    }
+   ]
+  },
+  {
+   "groupId": 604,
+   "groupName": "Base Set",
+   "productId": 42402,
+   "name": "Pikachu",
+   "number": "058/102",
+   "rarity": "Common",
+   "prices": [
+    {
+     "subTypeName": "Normal",
+     "marketPrice": 7.84,
+     "lowPrice": 1.39
+    }
+   ]
+  },
+  {
+   "groupId": 1663,
+   "groupName": "Base Set (Shadowless)",
+   "productId": 106996,
+   "name": "Alakazam",
+   "number": "001/102",
+   "rarity": "Holo Rare",
+   "prices": [
+    {
+     "subTypeName": "1st Edition Holofoil",
+     "marketPrice": 323.42,
+     "lowPrice": 599.99
+    },
+    {
+     "subTypeName": "Unlimited Holofoil",
+     "marketPrice": 490.98,
+     "lowPrice": 180.0
+    }
+   ]
+  },
+  {
+   "groupId": 1663,
+   "groupName": "Base Set (Shadowless)",
+   "productId": 106999,
+   "name": "Charizard",
+   "number": "004/102",
+   "rarity": "Holo Rare",
+   "prices": [
+    {
+     "subTypeName": "1st Edition Holofoil",
+     "marketPrice": null,
+     "lowPrice": 100000.0
+    },
+    {
+     "subTypeName": "Unlimited Holofoil",
+     "marketPrice": 2172.24,
+     "lowPrice": 3187.0
+    }
+   ]
+  },
+  {
+   "groupId": 1663,
+   "groupName": "Base Set (Shadowless)",
+   "productId": 107040,
+   "name": "Abra",
+   "number": "043/102",
+   "rarity": "Common",
+   "prices": [
+    {
+     "subTypeName": "1st Edition",
+     "marketPrice": 44.64,
+     "lowPrice": 21.76
+    },
+    {
+     "subTypeName": "Unlimited",
+     "marketPrice": 10.98,
+     "lowPrice": 2.25
+    }
+   ]
+  },
+  {
+   "groupId": 1663,
+   "groupName": "Base Set (Shadowless)",
+   "productId": 107055,
+   "name": "Pikachu",
+   "number": "058/102",
+   "rarity": "Common",
+   "prices": [
+    {
+     "subTypeName": "1st Edition",
+     "marketPrice": 198.42,
+     "lowPrice": 197.89
+    },
+    {
+     "subTypeName": "Unlimited",
+     "marketPrice": 50.18,
+     "lowPrice": 23.0
+    }
+   ]
+  }
+ ],
+ "subtype_inventory": {
+  "604": {
+   "Holofoil": 16,
+   "Normal": 92
+  },
+  "1663": {
+   "1st Edition Holofoil": 14,
+   "Unlimited Holofoil": 15,
+   "1st Edition": 87,
+   "Unlimited": 87,
+   "Normal": 3
+  },
+  "1396": {
+   "1st Edition": 92,
+   "Unlimited": 92,
+   "1st Edition Holofoil": 19,
+   "Unlimited Holofoil": 19,
+   "Normal": 3
+  },
+  "605": {
+   "Holofoil": 20,
+   "Normal": 114
+  },
+  "635": {
+   "1st Edition Holofoil": 16,
+   "Unlimited Holofoil": 16,
+   "1st Edition": 48,
+   "Unlimited": 48,
+   "Normal": 5
+  },
+  "1372": {
+   "Normal": 142,
+   "Reverse Holofoil": 124,
+   "Holofoil": 28
+  },
+  "1374": {
+   "Normal": 92,
+   "Reverse Holofoil": 107,
+   "Holofoil": 19
+  },
+  "23473": {
+   "Normal": 166,
+   "Reverse Holofoil": 147,
+   "Holofoil": 95
+  }
+ },
+ "subtype_combinations_per_product": {
+  "604": {
+   "Holofoil": 16,
+   "Normal": 92
+  },
+  "1663": {
+   "1st Edition Holofoil + Unlimited Holofoil": 14,
+   "Unlimited Holofoil": 1,
+   "1st Edition + Unlimited": 87,
+   "Normal": 3
+  },
+  "1396": {
+   "1st Edition + Unlimited": 92,
+   "1st Edition Holofoil + Unlimited Holofoil": 19,
+   "Normal": 3
+  },
+  "605": {
+   "Holofoil": 20,
+   "Normal": 114
+  },
+  "635": {
+   "1st Edition Holofoil + Unlimited Holofoil": 16,
+   "1st Edition + Unlimited": 48,
+   "Normal": 5
+  },
+  "1372": {
+   "Normal + Reverse Holofoil": 117,
+   "Normal": 25,
+   "Holofoil": 24,
+   "Holofoil + Reverse Holofoil": 4,
+   "Reverse Holofoil": 3
+  },
+  "1374": {
+   "Normal + Reverse Holofoil": 88,
+   "Holofoil + Reverse Holofoil": 19,
+   "Normal": 4
+  },
+  "23473": {
+   "Normal": 35,
+   "Normal + Reverse Holofoil": 131,
+   "Holofoil + Reverse Holofoil": 16,
+   "Holofoil": 79
+  }
+ }
+}

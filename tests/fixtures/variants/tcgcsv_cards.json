@@ -1,5 +1,5 @@
 {
- "_source": "tcgcsv.com/tcgplayer/3/{groupId}/products+prices, coletado 2026-11-24 (recorte)",
+ "_source": "tcgcsv.com, coletado 2026-11-24: https://tcgcsv.com/tcgplayer/3/{groupId}/products e /prices; groupId 1396 (Neo Genesis), 604 (Base Set), 23473. Recorte de 6 cartas; valores reconferidos contra a coleta de 2026-11-24 (todos batem).",
  "cards": [
   {
    "groupId": 1396,
