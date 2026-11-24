@@ -779,6 +779,7 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
   blueprint + sem preço CT válido + payload inesperado + moeda não suportada + descartadas pelo canário"; a soma fecha.
 - **Colunas de preço:** `Preço CT validado (R$)` é SÓ o preço de checkout (LIVE) validado, vazio se não validou;
   `Preço usado na conta (R$)` é o que entrou na margem (o validado, ou o preço cru do scan quando não houve validação).
+  Em linha não validada `Preço CT validado (R$)` fica VAZIO, inclusive no XLSX (o hyperlink de preço não escreve em célula vazia).
 - **Nota honesta sobre o câmbio (informada pelo dono, medida no checkout):** o preço do scan por expansão vem em USD
   e é convertido pelo câmbio oficial (~5,87), mas o checkout em BRL da CardTrader sai cerca de 17,6% acima (cotação
   efetiva ~6,90; ~7,80 em alguns vendedores). Por isso a margem de linha NÃO validada está inflada: só a margem com
