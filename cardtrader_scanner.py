@@ -741,6 +741,14 @@ SET_TIMEOUT_OVERRIDES: dict[str, int] = {
     "ds": 1080,  # EX Delta Species — 18min (folga sobre os 12min parciais)
     "n1": 1080,  # Neo Genesis — 18min
     "n4": 1080,  # Neo Destiny — 18min
+    # Lote 1 (2026-11): estouraram 8min no run 2026-06-27 (skip-list: cg 76/105,
+    # g1 97/211, g2 73/345, tr 100/176) ou são sets grandes (hp, aq).
+    "cg": 1080,  # EX Crystal Guardians — 18min
+    "g1": 1080,  # Gym Heroes — 18min
+    "g2": 1080,  # Gym Challenge — 18min
+    "tr": 1080,  # Team Rocket — 18min
+    "hp": 1080,  # EX Holon Phantoms — 18min
+    "aq": 1080,  # Aquapolis — 18min
     # Era Mega Evolution: sets novos que a pokemontcg.io NÃO precifica → caem no
     # fallback tcgcsv (~1 req/listing = lento). Sem override estouram o default de
     # 8min e vão pra skip-list. Só entram aqui sets que o tcgcsv REALMENTE precifica.
@@ -2313,7 +2321,7 @@ class TcgCsvFallbackProvider(PricingProvider):
             ct_set_code, ptcg_setcodes, set_name, self._groups
         )
         if not group_ids:
-            log.debug(
+            log.warning(
                 f"tcgcsv: sem groupId ÚNICO p/ {ct_set_code} "
                 f"(ptcg={ptcg_setcodes}, name={set_name!r}) — fallback pulado"
             )
@@ -2600,6 +2608,10 @@ _SKIP_LIST_TRANSIENT_PREFIXES = (
     "mass_pricing_failure_",
     "ct_blueprints_timeout_",
     "ct_listings_timeout_",
+    # Lote 1 (2026-11): no_coverage_ e network_error_ também são sintomas de
+    # fonte/rede degradada (ex.: 500/502 da pokemontcg.io), não fato do set.
+    "no_coverage_",
+    "network_error_",
 )
 
 
@@ -2945,7 +2957,8 @@ class CheckpointWriter:
         self._opps_written += 1
 
     def write_set_complete(self, set_code: str, set_name: str,
-                            per_set_stats: dict, elapsed_s: float) -> None:
+                            per_set_stats: dict, elapsed_s: float,
+                            abort_reason: Optional[str] = None) -> None:
         if not self.enabled:
             return
         self._write({
@@ -2957,6 +2970,10 @@ class CheckpointWriter:
             "priced": per_set_stats.get("priced", 0),
             "opps_found": per_set_stats.get("opps_found", 0),
             "elapsed_s": round(elapsed_s, 2),
+            # Lote 1: distingue set completo de set abortado (timeout/no_coverage).
+            # Checkpoints antigos não têm estes campos → leitores tratam como complete.
+            "status": "aborted" if abort_reason else "complete",
+            "abort_reason": abort_reason,
         })
         self._sets_written += 1
 
@@ -3261,6 +3278,7 @@ class Scanner:
                 f"Abortando."
             )
             self.stats["expansions_timed_out"] += 1
+            self._set_abort_reason = f"per_set_timeout_{int(effective)}s_at_{stage}"
             try:
                 add_to_skip_list(
                     exp_code,
@@ -3275,6 +3293,7 @@ class Scanner:
         exp_id = expansion["id"]
         exp_code = expansion.get("code", "")
         exp_name = expansion.get("name", "")
+        self._set_abort_reason: Optional[str] = None  # Lote 1: motivo se abortar
         log.info(f"→ Scan: {exp_name} ({exp_code}) [id={exp_id}]")
         # v2.4: marca início pra wall-clock timeout no pricing loop
         set_start = time.monotonic()
@@ -3307,6 +3326,7 @@ class Scanner:
         except TimeoutError as e:
             log.error(f"  ⏱️  CT blueprints timeout para {exp_code}: {e}")
             self.stats["expansions_timed_out"] += 1
+            self._set_abort_reason = f"ct_blueprints_timeout_{int(effective_timeout_s or 0)}s"
             try:
                 add_to_skip_list(
                     exp_code,
@@ -3335,6 +3355,7 @@ class Scanner:
         except TimeoutError as e:
             log.error(f"  ⏱️  CT listings timeout para {exp_code}: {e}")
             self.stats["expansions_timed_out"] += 1
+            self._set_abort_reason = f"ct_listings_timeout_{int(effective_timeout_s or 0)}s"
             try:
                 add_to_skip_list(
                     exp_code,
@@ -3397,6 +3418,7 @@ class Scanner:
                     f"não do set)."
                 )
                 self.stats["expansions_no_coverage_abort"] += 1
+                self._set_abort_reason = "tcgcsv_primary_no_group_id"
                 return
 
         # Para cada listing filtrado, busca preço TCG e calcula margem
@@ -3424,6 +3446,7 @@ class Scanner:
                     f"{i-1}/{total_listings} listings priced."
                 )
                 self.stats["expansions_timed_out"] += 1
+                self._set_abort_reason = f"per_set_timeout_{int(effective_timeout_s)}s_at_{i-1}_of_{total_listings}"
                 add_to_skip_list(exp_code, f"per_set_timeout_{int(effective_timeout_s)}s_at_{i-1}_of_{total_listings}")
                 return
             if i % 50 == 0 or i == total_listings:
@@ -3476,6 +3499,7 @@ class Scanner:
                     f"falharam. Abortando set."
                 )
                 self.stats["expansions_mass_pricing_abort"] += 1
+                self._set_abort_reason = f"mass_pricing_failure_{set_pricing_failures}_of_{set_pricing_attempts}"
                 try:
                     add_to_skip_list(
                         exp_code,
@@ -3525,6 +3549,7 @@ class Scanner:
                         f"após {i}/{total_listings}."
                     )
                     self.stats["expansions_no_coverage_abort"] += 1
+                    self._set_abort_reason = f"no_coverage_{set_consecutive_misses}_consecutive_misses_at_{i}_of_{total_listings}"
                     try:
                         add_to_skip_list(
                             exp_code,
@@ -3768,6 +3793,7 @@ class Scanner:
             stats_pre = dict(self.stats) if checkpoint and checkpoint.enabled else None
             set_start = time.monotonic()
             opps_pre_count = len(opps)
+            self._set_abort_reason = None
             try:
                 # v2.6: itera o generator e escreve cada Opportunity no checkpoint
                 # ASSIM QUE for yielded. Antes era `opps.extend(scan_expansion(exp))`
@@ -3780,6 +3806,17 @@ class Scanner:
             except requests.HTTPError as e:
                 log.error(f"Falha em {exp.get('name')}: {e}")
                 # Não emite set_complete em falha — recovery vai mostrar lacuna
+                continue
+            except requests.RequestException as e:
+                # Lote 1: falha de rede/CT (ex.: 3 tentativas esgotadas) é
+                # TRANSIENTE — prefixo próprio expira (TTL), ao contrário de
+                # unexpected_error_ (permanente).
+                log.error(
+                    f"Falha de rede em {exp.get('name')} ({exp_code}): "
+                    f"{type(e).__name__}: {e}. Continuando próximos sets."
+                )
+                self._set_abort_reason = f"network_error_{type(e).__name__}"
+                add_to_skip_list(exp_code, f"network_error_{type(e).__name__}")
                 continue
             except Exception as e:
                 # v2.5.1: nunca deixa exceção genérica matar o full scan
@@ -3802,6 +3839,7 @@ class Scanner:
                     set_name=exp.get("name", ""),
                     per_set_stats=per_set_stats,
                     elapsed_s=time.monotonic() - set_start,
+                    abort_reason=getattr(self, "_set_abort_reason", None),
                 )
         # Ordena por margem bruta desc (maior oportunidade primeiro)
         opps.sort(key=lambda o: o.margin_pct, reverse=True)
