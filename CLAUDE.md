@@ -153,6 +153,19 @@ Exemplo: compra 75, referência 100 → margem 25% (**não** passa em 30%), ROI 
 > `Lucro bruto (R$)` (era `Lucro Líq`) — o conteúdo é o mesmo cálculo do scanner na base
 > venda, só que agora vem de um único módulo.
 
+> **Detalhe técnico (pode pular):** o primeiro rastreio usa um preço "cru"
+> (*per-expansion*, agregado por coleção); a conferência (`--validate-top`)
+> refaz com o preço **real de checkout** (*per-blueprint*, por carta exata).
+> **Sempre conferir** — sem isso, no passado **~76% dos "achados" eram falsos**.
+> Desde o Lote 3 (2026-11) o padrão de `--validate-top` é **validar TODAS** as
+> oportunidades elegíveis (omitir a flag = todas); `--validate-top N` limita às N
+> de maior margem e `--validate-top 0` desliga a validação. Linha que não pôde
+> ser validada (erro de API, STALE) **continua na saída com o status real**.
+>
+> A opção `--hub-fee` continua existindo nos dois scripts e tem **default 0.0**
+> (margem bruta). Se um dia quiser reembutir os 6% antigos, passe `--hub-fee
+> 0.06` no scanner **e** no postprocess.
+
 ---
 
 ## Como rodar
@@ -196,8 +209,8 @@ estão divididos em **6 grupos por recência** (G1 = Mega Evolution até Chaos
 Rising + era SV … G6 = EX inicial + e-Card + WotC), cada um ≤~2h30 de scan —
 runs mais longos morriam sem entregar. O skill **sempre pergunta quais grupos
 rodar**, roda um por vez (nunca em paralelo) com os valores canônicos
-(threshold 0.30, validate-top 30, min-net-margin 0.20, max-consecutive-misses
-40) e entrega **cada grupo**
+(threshold 0.30, min-net-margin 0.20, max-consecutive-misses 40; **sem**
+`--validate-top`: valida todas) e entrega **cada grupo**
 pela tabela do postprocess assim que termina. `/scan pre ssp` = sets custom;
 `/scan total` = catálogo inteiro via workflow semanal. A partição é travada por
 teste (`tests/test_scan_skill_profiles.py`) contra o mapa do scanner. **Nenhum
@@ -218,7 +231,7 @@ use exatamente os valores canônicos:
 .venv\Scripts\python.exe cardtrader_scanner.py \
   --sets sfa scr par paf tef twm ssp dri blk jtg \   # quais coleções (códigos CardTrader)
   --threshold 0.30 \                                  # margem mínima 30% (FRAÇÃO!)
-  --validate-top 30 \                                 # confere os 30 melhores de verdade
+                                                      # (sem --validate-top = confere TODAS)
   --min-net-margin 0.20 \                             # descarta lucro líquido < 20%
   --output outputs/scan_da_vez.xlsx                   # onde salvar a planilha
 
@@ -233,8 +246,9 @@ use exatamente os valores canônicos:
 
 **Defaults que enganam (documentados de propósito):**
 
-- `--validate-top` default **0** = sem validação per-blueprint se omitido —
-  crítico, dado os ~76% de falsos sem ela. Canônico = `30`.
+- `--validate-top`: omitido = valida **todas** (Lote 3). `N` limita, `0` desliga
+  (sem validação ~76% dos achados são falsos). Os comandos canônicos do skill
+  `/scan` **não passam** a flag (validam todas).
 - `--min-net-margin`: default **0.0 no scanner** e **0.30 no postprocess** (corte do
   dono, margem sobre a venda) — o comando canônico passa `0.20` explícito no scanner.
 
@@ -519,6 +533,8 @@ muitas cartas) precisam de bem mais que 8 minutos. Elas estouravam o tempo
 
 - `df` (EX Dragon Frontiers) — **20 min**;
 - `ds` / `n1` / `n4` — **18 min**;
+- `cg` / `g1` / `g2` / `tr` / `hp` / `aq` — **18 min** (adicionados no Lote 1 de resiliência,
+  2026-11: estouravam os 8 min no run de 2026-06-27);
 - `cri` (Chaos Rising, era Mega Evolution / me4 — adicionado no #47) —
   **20 min**: a pokemontcg.io não precifica o set, então ele cai no fallback
   tcgcsv per-listing, que é lento.
@@ -532,6 +548,49 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
 - `asc` (Ascended Heroes) também **NÃO** precisa de override: o resgate tcgcsv
   dele é um bulk único, não per-listing — mas exige o gotcha do
   `--max-consecutive-misses > 0` (ver "Como rodar").
+
+---
+
+## Desfecho de cada set, skip-list e resgate tcgcsv (Lote 3, 2026-11)
+
+- **Quatro desfechos por set** (gravados no `set_complete` do checkpoint e no
+  resumo do run): `complete` (tudo precificado) · `complete_with_unpriced` (o set
+  foi coberto; N ofertas ficaram sem referência e estão na aba "Sem preço") ·
+  `no_coverage` (a fonte respondeu e **nada** do set foi precificado) ·
+  `operational_failure` (timeout, 5xx, erro de rede, erro inesperado, falha em
+  massa de preço, tcgcsv fora do ar no resgate — **tentar de novo**; aparece no
+  resumo como "NÃO CONCLUÍDOS — tentar de novo").
+- **Skip-list só para `no_coverage` de verdade:** corte por misses consecutivos
+  **e** nada do set precificado (nem pelo resgate) **e** o resgate não falhou.
+  Falha operacional **nunca** entra na skip-list.
+- **Validação: run novo NUNCA reaproveita validação** (regra do operador: nada
+  de cache de scans anteriores para fundamentar recomendação de compra). Todo run
+  valida do zero; cada linha validada carrega `Validado em` (data/hora com fuso)
+  e `Validação` (`nova` | `reaproveitada`). Única exceção, com opt-in explícito:
+  `--resume-validation` retoma a validação de um run **interrompido** (sem o
+  marcador `validation_complete`) validada há ≤ 3 h, e só para a oferta com o
+  **mesmo preço de oferta e a mesma referência**; a linha reaproveitada sai
+  marcada. Rodar de novo com o mesmo `--output` **arquiva** o checkpoint anterior
+  (`*.prev`, nunca apaga) e começa um checkpoint limpo — oportunidades de dois
+  runs não se misturam no recovery. Referência/câmbio buscados antes do início do
+  run nunca são lidos (`Cache.begin_run`). Ctrl-C no meio: o set em curso vira
+  `operational_failure` (`interrupted_by_user`), o que faltava vai para "Sem
+  preço", sets não iniciados ficam como `interrupted_not_started`, o XLSX parcial
+  e o resumo são escritos e o processo sai com código 130. Exceção inesperada no
+  meio do set: o que faltava vai para "Sem preço" (falha operacional) — a soma
+  precificadas + sem preço = total vale sempre. `/groups` do tcgcsv: 3 tentativas
+  com espera curta e cache negativo de ~3 min dentro do run.
+- ⏱️ **Estimativa de tempo dos grupos do `/scan`: calibrada com 30 validações** (o
+  default antigo `--validate-top 30`); agora o canônico valida TODAS, então a
+  duração por grupo precisa ser **remedida** num scan real (ainda não feito) —
+  trate os "≤~2h30" como estimativa, não garantia.
+- **Resgate tcgcsv:** tudo que a pokemontcg.io não precificou (misses do fim do
+  set, falhas, listings não alcançados) é oferecido ao tcgcsv (referência buscada
+  **neste run**, mesma escada de variante). Cada linha leva `Fonte Preço` e
+  `Ref. Data/Hora`. Resgate parcial **nunca** é "completo".
+- **Nada some:** listings sem preço vão para a aba **"Sem preço"** do XLSX
+  (motivo: `sem_cobertura`, `falha_operacional` ou `nao_alcancado`) e contam em
+  `Stats` (`sets_operational_failure`, `sets_no_coverage`, `listings_sem_preco`).
 
 ---
 

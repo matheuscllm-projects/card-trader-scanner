@@ -25,6 +25,7 @@ subtype, reintroduz a inflação Gengar $146→$1599 e quebra (c)).
 from __future__ import annotations
 
 import sys
+import zlib
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -251,8 +252,8 @@ def test_d_never_substitutes_another_subtype():
 def _listing(card_name, num, set_code="asc", foil=False, rarity="Common",
              price_brl=60.0):
     return Listing(
-        product_id=hash((card_name, num)) & 0xFFFF,
-        blueprint_id=hash((card_name, num, "bp")) & 0xFFFF,
+        product_id=zlib.crc32(repr((card_name, num)).encode()),
+        blueprint_id=zlib.crc32(repr((card_name, num, "bp")).encode()),
         card_name=card_name, set_code=set_code, set_name="Ascended Heroes",
         collector_number=num, condition="Near Mint", language="en",
         price_cents=int(price_brl * 100), price_currency="BRL",
@@ -377,9 +378,11 @@ def test_a_pokemontcg_priced_set_never_invokes_tcgcsv():
     assert all((o.price_source or "pokemontcg") == "pokemontcg" for o in opps)
 
 
-def test_e_no_fallback_when_pokemontcg_has_any_hit():
-    """Cobertura PARCIAL: pokemontcg precifica 1 dos 2 cards → tcgcsv NÃO entra
-    (a regra é set_tcg_hits == 0, não 'completar buracos por-card')."""
+def test_e_fallback_consulted_for_misses_even_when_pokemontcg_has_hit():
+    """Lote 3 (decisão 3, substitui o antigo 'tcgcsv NÃO entra com hit prévio'):
+    pokemontcg precifica 1 dos 2 cards → o miss (Card B) É oferecido ao tcgcsv.
+    Aqui o tcgcsv também não tem a carta → B continua sem preço, NÃO some
+    (fica em unpriced_rows) e nada é rotulado como resgatado."""
     listings = [
         _listing("Card A", "001/100", set_code="dri", rarity="Holo Rare"),
         _listing("Card B", "002/100", set_code="dri", rarity="Holo Rare"),
@@ -390,10 +393,11 @@ def test_e_no_fallback_when_pokemontcg_has_any_hit():
         tcgcsv, listings, max_misses=1,
     )
     opps = _run_scan_expansion(scanner, listings)
-    # só A vira opp; tcgcsv não roda (houve hit no set)
     assert [o.listing.card_name for o in opps] == ["Card A"]
-    tcgcsv.session.get.assert_not_called()
-    assert scanner.stats["tcgcsv_fallback_sets"] == 0
+    # miss do fim do set oferecido ao tcgcsv: /groups + /products + /prices
+    assert [c.args[0].rsplit("/", 1)[-1] for c in tcgcsv.session.get.call_args_list]         == ["groups", "products", "prices"]
+    assert scanner.stats["tcgcsv_fallback_sets"] == 0  # nada resgatado
+    assert [(r["card"], r["reason"]) for r in scanner.unpriced_rows]         == [("Card B", "sem_cobertura")]
 
 
 def test_a_opt_out_disables_fallback():

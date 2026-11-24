@@ -410,7 +410,9 @@ EXCLUDE_GRADED = True            # exclui PSA/BGS/CGC
 # (senão o cache serve preço calculado com a lógica velha até o TTL). Histórico:
 #   1 = pré-v2.18 (reverseHolofoil inflado em holo rare) — agora invalidado.
 #   2 = v2.18+ (seleção ciente de raridade+reverse).
-PRICE_LOGIC_VERSION = "2"
+#   3 = lotes 2/3 (2026-11): nome CT normalizado (δ Delta Species / Gold Star) e
+#       número com letra/prefixo na query — casamento de carta mudou.
+PRICE_LOGIC_VERSION = "3"
 REQUEST_DELAY_CT = 0.15          # CT tem limite 10/s → 0.15s deixa folga
 REQUEST_DELAY_PRICING = 0.1      # pokemontcg.io permite 20k/dia (~0.23/s)
 TIMEOUT = 30
@@ -655,12 +657,21 @@ CT_JP_SETCODE_COLLISIONS: dict[str, str] = {
 }
 
 
+# Lote 2 (#13): códigos CT cujo texto é, por coincidência, o id de OUTRO set na
+# pokemontcg.io. Conferido em sets/en.json de PokemonTCG/pokemon-tcg-data
+# (2026-11-24): {"id": "g1", "name": "Generations"}; Gym Heroes = "gym1". Nunca
+# resolvem por identidade (só pelo alias explícito).
+CT_PTCG_ID_COLLISIONS: dict[str, str] = {
+    "g1": "Gym Heroes (CT) ≠ Generations (ptcg g1)",
+}
+
+
 def ptcg_expected_sets(ct_set_code: str) -> set[str]:
     """setcodes pokemontcg.io aceitos pra um código CT: o próprio código (exceto
     colisão JP) + aliases de SET_ALIAS_TO_PTCG."""
     code = (ct_set_code or "").lower()
     out: set[str] = set()
-    if code and code not in CT_JP_SETCODE_COLLISIONS:
+    if code and code not in CT_JP_SETCODE_COLLISIONS and code not in CT_PTCG_ID_COLLISIONS:
         out.add(code)
     for alias in PokemonTcgIoProvider.SET_ALIAS_TO_PTCG.get(code, []):
         out.add(alias.lower())
@@ -741,6 +752,14 @@ SET_TIMEOUT_OVERRIDES: dict[str, int] = {
     "ds": 1080,  # EX Delta Species — 18min (folga sobre os 12min parciais)
     "n1": 1080,  # Neo Genesis — 18min
     "n4": 1080,  # Neo Destiny — 18min
+    # Lote 1 (2026-11): estouraram 8min no run 2026-06-27 (skip-list: cg 76/105,
+    # g1 97/211, g2 73/345, tr 100/176) ou são sets grandes (hp, aq).
+    "cg": 1080,  # EX Crystal Guardians — 18min
+    "g1": 1080,  # Gym Heroes — 18min
+    "g2": 1080,  # Gym Challenge — 18min
+    "tr": 1080,  # Team Rocket — 18min
+    "hp": 1080,  # EX Holon Phantoms — 18min
+    "aq": 1080,  # Aquapolis — 18min
     # Era Mega Evolution: sets novos que a pokemontcg.io NÃO precifica → caem no
     # fallback tcgcsv (~1 req/listing = lento). Sem override estouram o default de
     # 8min e vão pra skip-list. Só entram aqui sets que o tcgcsv REALMENTE precifica.
@@ -944,6 +963,59 @@ def compute_valorization(rarity: Optional[str],
     return score, note
 
 
+_CT_DELTA_SUFFIX = re.compile(r"\s+Delta Species$")
+
+
+def ptcg_card_name(ct_name: str) -> str:
+    """Nome CT → nome usado pela pokemontcg.io (Lote 2, #1).
+
+    Conferido em cards/en/ex15|ex11|ex14.json (PokemonTCG/pokemon-tcg-data):
+    CT "Ampharos δ Delta Species" = ptcg "Ampharos δ"; CT "Charizard ☆ Gold Star
+    δ Delta Species" = ptcg "Charizard ★ δ"; CT "Groudon ☆ Gold Star" = ptcg
+    "Groudon ★". Nome sem esses padrões passa intacto."""
+    name = ct_name or ""
+    if "δ" in name:
+        name = _CT_DELTA_SUFFIX.sub("", name)
+    return name.replace("☆ Gold Star", "★")
+
+
+def now_iso() -> str:
+    """Data/hora local COM fuso, em segundos (ex. 2026-11-24T10:00:00-03:00).
+    Único formato de data/hora do scanner (scanned_at, price_fetched_at,
+    validated_at). Função de módulo p/ os testes poderem congelá-la."""
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _to_tz_iso(value: Optional[str]) -> Optional[str]:
+    """ISO naive (cache SQLite, hora local) → mesmo formato de now_iso()."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value)).astimezone().isoformat(timespec="seconds")
+    except ValueError:
+        return None
+
+
+def ptcg_number_query(raw: str) -> str:
+    """Número de coleção CT → forma gravada no campo `number` do pokemontcg.io.
+
+    Conferido em PokemonTCG/pokemon-tcg-data (cards/en/*.json, 2026-11-24):
+    numérico puro sem zero à esquerda ('1', '50'); prefixados mantêm zeros e
+    caixa ('SWSH001', 'XY01', 'SM01', 'TG01', 'GG01', 'SV001', 'H1'); sufixo em
+    minúscula ('SM30a', 'XY67a', '28a'). Só se remove o zero à esquerda quando
+    vem ANTES de uma letra (forma CT '0H2' → 'H2') ou o número é puro."""
+    if not raw:
+        return ""
+    head = str(raw).split("/")[0].strip()
+    if "|" in head:
+        head = head.split("|")[-1].strip()
+    if not head:
+        return ""
+    if head.isdigit():
+        return head.lstrip("0") or "0"
+    return re.sub(r"^0+(?=[A-Za-z])", "", head)
+
+
 def clean_collector_number(raw: str) -> str:
     """Normaliza um collector_number pra uso em query no pokemontcg.io.
     Entrada pode vir limpa ("007") ou com rarity concatenada ("SIR | 161/131").
@@ -1018,7 +1090,7 @@ class Opportunity:
     margin_brl: float                # tcg_brl - ct_brl em R$ absolutos
     estimated_shipping_brl: float    # frete estimado em BRL (default 0 — modelo consolidação)
     net_margin_pct: float            # margem após dedução de frete (= margem bruta quando frete=0)
-    scanned_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
+    scanned_at: str = field(default_factory=lambda: now_iso())
     # v2.0 — validação per-blueprint (preço REAL com markup CT)
     validation_status: str = "NOT_VALIDATED"
     live_price_brl: Optional[float] = None
@@ -1077,6 +1149,14 @@ class Opportunity:
     # postprocess — em vez de serem descartadas no scan (o que esvaziava a
     # entrega). NÃO conta como "oportunidade" no funil; é referência near-miss.
     below_threshold: bool = False
+    # Lote 3: data/hora (ISO, local) em que a REFERÊNCIA de preço foi obtida
+    # NESTE run (pokemontcg.io: consulta; tcgcsv: prefill do set). "" se a fonte
+    # não informa. Acompanha `price_source` (fonte) em toda linha.
+    price_fetched_at: str = ""
+    # Lote 3c: data/hora (com fuso) em que a validação per-blueprint foi feita e
+    # se ela foi REAPROVEITADA de um run interrompido (--resume-validation).
+    validated_at: str = ""
+    validation_reused: bool = False
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1087,6 +1167,10 @@ class Opportunity:
 #   - 1 arquivo, zero setup (vs Redis/Postgres)
 # ══════════════════════════════════════════════════════════════════════
 class Cache:
+    # Lote 3c: referência/FX buscada ANTES do início do run nunca vale (trava
+    # estrutural além do clear_prices). None = sem limite (--dry-run/debug).
+    min_fetched_at: Optional[datetime] = None
+
     def __init__(self, db_path: Path = CACHE_DB):
         self.db = sqlite3.connect(db_path)
         self.db.execute("PRAGMA journal_mode=WAL")  # melhor concorrência
@@ -1137,6 +1221,8 @@ class Cache:
         rate, fetched_at = row
         if datetime.fromisoformat(fetched_at) < datetime.now() - FX_TTL:
             return None
+        if self.min_fetched_at and datetime.fromisoformat(fetched_at) < self.min_fetched_at:
+            return None
         return rate
 
     def set_fx(self, pair: str, rate: float):
@@ -1155,6 +1241,8 @@ class Cache:
             return None
         market, low, mid, raw_json, fetched_at = row
         if datetime.fromisoformat(fetched_at) < datetime.now() - PRICE_TTL:
+            return None
+        if self.min_fetched_at and datetime.fromisoformat(fetched_at) < self.min_fetched_at:
             return None
         # v2.7.1: extrai `tcgplayer.url` do raw_json pra hidratar Opportunity
         # mesmo em cache hit (sem refazer _search()). raw_json é o card dict
@@ -1188,7 +1276,7 @@ class Cache:
         return {"market_usd": market, "low_usd": low, "mid_usd": mid,
                 "tcg_url": tcg_url, "variant_used": variant_used,
                 "ptcg_rarity": ptcg_rarity, "set_release_date": set_release_date,
-                "normal_market": normal_market}
+                "normal_market": normal_market, "fetched_at": fetched_at}
 
     def set_price(self, key: str, market: float, low: float, mid: float, raw: dict):
         self.db.execute(
@@ -1210,6 +1298,12 @@ class Cache:
             (blueprint_id, provider, product_id, confidence, datetime.now().isoformat()),
         )
         self.db.commit()
+
+    def begin_run(self) -> None:
+        """Início de um run de coleta: marca o limite (nenhuma referência/FX
+        anterior a agora é lida) e limpa os caches voláteis."""
+        self.min_fetched_at = datetime.now()
+        self.clear_prices()
 
     def clear_prices(self):
         """Limpa caches voláteis (preços TCG e FX). Útil pra --no-cache em
@@ -1277,6 +1371,7 @@ class CardTraderClient:
         })
         self.delay = delay
         self._last_call = 0.0
+        self.rate_limit_hits = 0  # Lote 3b: 429 acumulados (progresso da validação)
 
     def _get(self, path: str, deadline_ts: Optional[float] = None, **params) -> dict | list:
         """GET com retry. Aceita `deadline_ts` (monotonic): se passar, retries
@@ -1333,6 +1428,7 @@ class CardTraderClient:
                 r = self.session.get(url, params=params, timeout=req_timeout)
                 self._last_call = time.time()
                 if r.status_code == 429:
+                    self.rate_limit_hits += 1
                     retry_after = int(r.headers.get("Retry-After", "5"))
                     log.warning(f"Rate limit CT, esperando {retry_after}s...")
                     if _sleep_capped(retry_after):
@@ -1781,7 +1877,7 @@ class PokemonTcgIoProvider(PricingProvider):
         "mt":    ["dp2"],         # Mysterious Treasures
         "sw":    ["dp3"],         # Secret Wonders
         "ge":    ["dp4"],         # Great Encounters
-        "wcd2010": ["dp6"],       # World Championship Deck 2010 — Legends Awakened
+        # (removido no Lote 2: dp6 = Legends Awakened, não WCD 2010 — sets/en.json)
         "sft":   ["dp7"],         # Stormfront
         # Platinum
         "pl":    ["pl1"],         # Platinum base
@@ -1894,8 +1990,11 @@ class PokemonTcgIoProvider(PricingProvider):
         sets perdem cobertura (ex pupr→sm5 = Lusamine Promos Ultra Prism);
         compensado por UNSUPPORTED_SETS no postprocess (Layer 3).
         """
-        num_clean = clean_collector_number(number)
-        safe_name = card_name.replace('"', '\\"')
+        # Lote 2 (#2): chave que PRESERVA letra/prefixo (H1 ≠ 1; 50A ≠ 50) — a
+        # mesma do caminho tcgcsv. O digits-only antigo casava H1 com a carta #1
+        # (ex.: Aquapolis: Ampharos "1" e "H1" existem em ecard2.json).
+        num_clean = ptcg_number_query(number)
+        safe_name = ptcg_card_name(card_name).replace('"', '\\"')
         base_q = f'name:"{safe_name}"'
         if num_clean:
             base_q += f" number:{num_clean}"
@@ -1958,6 +2057,7 @@ class PokemonTcgIoProvider(PricingProvider):
         # v2.8 Layer 4: reset last_variant_used também.
         self.last_tcg_url = None
         self.last_variant_used = None
+        self.last_price_fetched_at = None  # Lote 3: data/hora da referência
         # v2.13 (valorização): metadados pra score + chase tier. Reset a cada
         # chamada pra evitar carry-over do card anterior.
         self.last_ptcg_rarity = None
@@ -1978,6 +2078,7 @@ class PokemonTcgIoProvider(PricingProvider):
                      f"{collector_number}:{card_name}:foil={foil}")
         cached = self.cache.get_price(cache_key)
         if cached:
+            self.last_price_fetched_at = _to_tz_iso(cached.get("fetched_at"))
             self.last_tcg_url = cached.get("tcg_url")
             self.last_variant_used = cached.get("variant_used")
             self.last_ptcg_rarity = cached.get("ptcg_rarity")
@@ -2084,6 +2185,7 @@ class PokemonTcgIoProvider(PricingProvider):
         except (TypeError, AttributeError):
             pass
         self.cache.set_price(cache_key, market, low, mid, card)
+        self.last_price_fetched_at = now_iso()
         return market
 
 
@@ -2264,6 +2366,10 @@ class TcgCsvFallbackProvider(PricingProvider):
     Tier, valorização) continuem funcionando. `last_price_source` = "tcgcsv"
     rotula a origem distintamente (honestidade real-vs-fonte)."""
     name = "tcgcsv"
+    GROUPS_ATTEMPTS = 3            # tentativas de /groups antes de desistir
+    GROUPS_RETRY_WAIT_S = 2.0      # espera curta entre tentativas
+    GROUPS_NEGATIVE_TTL_S = 180.0  # falha de /groups só vale ~3 min dentro do run
+    _groups_failed_at: Optional[float] = None
 
     def __init__(self, cache: Cache, session: Optional[Any] = None):
         self.cache = cache
@@ -2279,45 +2385,74 @@ class TcgCsvFallbackProvider(PricingProvider):
         # {id}) da variante priceada: tapa o furo do contrato de 2 links nos sets
         # de fallback E dá a chave de join pro DoubleHolo. NÃO afeta preço/margem.
         self._pid_index: dict[str, dict] = {}
+        # Lote 3: setcode CT → data/hora (ISO) do prefill deste run.
+        self._fetched_at: dict[str, str] = {}
+        self.last_prefill_status: Optional[str] = None
+        self.last_price_fetched_at: Optional[str] = None
         # último source rotulado (sempre "tcgcsv" quando este provider responde).
         self.last_price_source: Optional[str] = None
 
-    def _get_json(self, path: str) -> Optional[dict]:
+    def _get_json(self, path: str):
+        """GET tcgcsv → (json|None, failed). `failed` = FALHA OPERACIONAL (exceção,
+        timeout, 5xx, 429, JSON ilegível); HTTP 2xx/4xx = a fonte respondeu
+        (4xx = não tem esse recurso → (None, False))."""
         try:
             r = self.session.get(f"{TCGCSV_BASE}/{path}",
                                  headers={"User-Agent": TCGCSV_USER_AGENT},
                                  timeout=TIMEOUT)
-            if r.status_code != 200:
-                log.debug(f"tcgcsv {path} status {r.status_code}")
-                return None
-            return r.json()
+            if r.status_code == 200:
+                return r.json(), False
+            log.debug(f"tcgcsv {path} status {r.status_code}")
+            return None, (r.status_code == 429 or r.status_code >= 500)
         except Exception as e:  # noqa: BLE001
             log.debug(f"tcgcsv {path} falhou: {e!r}")
-            return None
+            return None, True
 
     def prefill_set(self, ct_set_code: str, ptcg_setcodes: list[str],
                     set_name: str) -> bool:
         """Pré-carrega o set inteiro do tcgcsv → índice por numerador→variantes.
 
-        Retorna True se ≥1 card foi indexado; False se sem groupId/rede falhou
-        (caller então não tem o que reprecificar). Roda no máx. 1× por set."""
+        Retorna True se ≥1 card foi indexado. `last_prefill_status` explica o
+        False: "no_group" (o tcgcsv RESPONDEU e não tem o set/dados = sem
+        cobertura) ou "fetch_failed" (rede/5xx/timeout = falha operacional).
+        Roda no máx. 1× por set; /groups com falha não é refeito a cada set
+        (cache negativo só dentro do run)."""
+        self.last_prefill_status = "ok" if self._set_index.get(ct_set_code) else "no_group"
         if ct_set_code in self._set_index:
             return bool(self._set_index[ct_set_code])
+        # Lote 3c: cache negativo de /groups EXPIRA em poucos minutos (um blip no
+        # 1º set não condena o run) e cada busca tenta algumas vezes com espera curta.
+        if (self._groups_fetched and self._groups is None
+                and self._groups_failed_at is not None
+                and time.monotonic() - self._groups_failed_at > self.GROUPS_NEGATIVE_TTL_S):
+            self._groups_fetched = False
         if not self._groups_fetched:
-            self._groups = tcgcsv_fetch_groups(self.session)
+            self._groups = None
+            for attempt in range(self.GROUPS_ATTEMPTS):
+                self._groups = tcgcsv_fetch_groups(self.session)  # None = falhou
+                if self._groups is not None:
+                    break
+                if attempt + 1 < self.GROUPS_ATTEMPTS:
+                    time.sleep(self.GROUPS_RETRY_WAIT_S)
             self._groups_fetched = True
-        if not self._groups:
+            self._groups_failed_at = time.monotonic() if self._groups is None else None
+        if self._groups is None:
+            self.last_prefill_status = "fetch_failed"
+            return False
+        if not self._groups:  # 200 com lista vazia: a fonte respondeu sem dados
             self._set_index[ct_set_code] = {}
+            self.last_prefill_status = "no_group"
             return False
         group_ids = resolve_tcgcsv_group_ids(
             ct_set_code, ptcg_setcodes, set_name, self._groups
         )
         if not group_ids:
-            log.debug(
+            log.warning(
                 f"tcgcsv: sem groupId ÚNICO p/ {ct_set_code} "
                 f"(ptcg={ptcg_setcodes}, name={set_name!r}) — fallback pulado"
             )
             self._set_index[ct_set_code] = {}
+            self.last_prefill_status = "no_group"
             return False
 
         # v2.28: set pode abranger >1 group (gen = Generations + Radiant
@@ -2325,10 +2460,17 @@ class TcgCsvFallbackProvider(PricingProvider):
         # (índice parcial perderia o guard de colisão abaixo).
         per_group: list[tuple[dict, dict]] = []
         for group_id in group_ids:
-            products = self._get_json(f"{group_id}/products")
-            prices = self._get_json(f"{group_id}/prices")
-            if not products or not prices:
+            products, f1 = self._get_json(f"{group_id}/products")
+            prices, f2 = self._get_json(f"{group_id}/prices")
+            if f1 or f2:
+                # falha de rede/5xx: NÃO cacheia o set como vazio (um retry
+                # no mesmo run ainda pode funcionar) e sinaliza falha operacional.
+                self.last_prefill_status = "fetch_failed"
+                return False
+            if not isinstance(products, dict) or not isinstance(prices, dict):
+                # 404 / corpo vazio: a fonte respondeu e não tem dados do set
                 self._set_index[ct_set_code] = {}
+                self.last_prefill_status = "no_group"
                 return False
             per_group.append(self._index_group(products, prices))
 
@@ -2350,6 +2492,8 @@ class TcgCsvFallbackProvider(PricingProvider):
                 pid_map[key] = pids[key]
         self._set_index[ct_set_code] = index
         self._pid_index[ct_set_code] = pid_map
+        self.__dict__.setdefault("_fetched_at", {})[ct_set_code] = now_iso()
+        self.last_prefill_status = "ok" if index else "no_group"
         if index:
             # v2.26: a mesma classe atende fallback (v2.23) e primário
             # (--provider tcgcsv) — mensagem neutra quanto ao papel.
@@ -2423,6 +2567,7 @@ class TcgCsvFallbackProvider(PricingProvider):
         self.last_set_release_date = None
         self.last_price_source = None
         self.last_normal_market = None
+        self.last_price_fetched_at = None
 
         index = self._set_index.get(set_code)
         if not index:
@@ -2454,6 +2599,7 @@ class TcgCsvFallbackProvider(PricingProvider):
             return None
         self.last_variant_used = chosen_variant
         self.last_price_source = "tcgcsv"
+        self.last_price_fetched_at = getattr(self, "_fetched_at", {}).get(set_code)
         # v2.25: link TCGplayer real (product page) da variante priceada. Antes
         # ficava None → linha de fallback saía sem [TCG] (furo do contrato de 2
         # links) e sem chave de join DH. productId vem do MESMO card priceado.
@@ -2600,6 +2746,10 @@ _SKIP_LIST_TRANSIENT_PREFIXES = (
     "mass_pricing_failure_",
     "ct_blueprints_timeout_",
     "ct_listings_timeout_",
+    # Lote 1 (2026-11): no_coverage_ e network_error_ também são sintomas de
+    # fonte/rede degradada (ex.: 500/502 da pokemontcg.io), não fato do set.
+    "no_coverage_",
+    "network_error_",
 )
 
 
@@ -2835,7 +2985,8 @@ class CheckpointWriter:
 
     def __init__(self, path: Path, every_n: int = 10,
                  heartbeat_path: Optional[Path] = None,
-                 flush_every_listings: int = 50):
+                 flush_every_listings: int = 50,
+                 resume_validation: bool = False):
         self.path = path
         self.every_n = every_n
         self.enabled = every_n > 0
@@ -2848,11 +2999,26 @@ class CheckpointWriter:
         self._fh = None
         self._opps_written = 0
         self._sets_written = 0
+        # Lote 3c: validações do run ANTERIOR, só quando o operador pediu
+        # --resume-validation e aquele run não terminou a validação.
+        self._prior_validations: dict = {}
         if self.enabled:
             # Garante diretório existente
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            # Abre em modo append — preserva qualquer conteúdo de run anterior
-            # incompleto. Recovery script pode unir múltiplas runs se necessário.
+            # Lote 3c: um run novo NUNCA empilha no checkpoint de outro run. O
+            # anterior é ARQUIVADO (renomeado, nunca apagado) e este começa limpo.
+            if self.path.exists() and self.path.stat().st_size > 0:
+                archived = self.path.with_name(
+                    f"{self.path.name}.{datetime.now():%Y%m%d-%H%M%S}.prev")
+                n = 1
+                while archived.exists():
+                    archived = self.path.with_name(
+                        f"{self.path.name}.{datetime.now():%Y%m%d-%H%M%S}.{n}.prev")
+                    n += 1
+                os.replace(self.path, archived)
+                log.info(f"Checkpoint anterior arquivado em {archived.name} (run novo = checkpoint novo)")
+                if resume_validation:
+                    self._prior_validations = self._read_validations(archived)
             self._fh = open(self.path, "a", encoding="utf-8")
             log.info(
                 f"Checkpoint JSONL ativo: {self.path} (flush per-set, "
@@ -2945,7 +3111,11 @@ class CheckpointWriter:
         self._opps_written += 1
 
     def write_set_complete(self, set_code: str, set_name: str,
-                            per_set_stats: dict, elapsed_s: float) -> None:
+                            per_set_stats: dict, elapsed_s: float,
+                            status: str = "complete",
+                            reason: Optional[str] = None,
+                            unpriced: int = 0,
+                            note: Optional[str] = None) -> None:
         if not self.enabled:
             return
         self._write({
@@ -2957,8 +3127,98 @@ class CheckpointWriter:
             "priced": per_set_stats.get("priced", 0),
             "opps_found": per_set_stats.get("opps_found", 0),
             "elapsed_s": round(elapsed_s, 2),
+            # Lote 3: desfecho do set — "complete" | "no_coverage" (a fonte
+            # respondeu e não tem as cartas) | "operational_failure" (rede/5xx/
+            # timeout/erro: tentar de novo). `unpriced` = listings do set sem
+            # referência. Checkpoints antigos não têm estes campos → complete.
+            "status": status,
+            "reason": reason,
+            "unpriced": unpriced,
+            "note": note,
         })
         self._sets_written += 1
+
+    def _ensure_open(self) -> bool:
+        """Reabre o arquivo (append) se já foi fechado — validação e sem-preço
+        são gravados DEPOIS do scan_complete."""
+        if not self.enabled:
+            return False
+        if self._fh is None:
+            self._fh = open(self.path, "a", encoding="utf-8")
+        return True
+
+    def write_unpriced(self, row: dict) -> None:
+        """Lote 3b: listing sem referência — vai pro checkpoint p/ o recovery."""
+        if self._ensure_open():
+            self._write({"_type": "unpriced", **row})
+
+    def write_validation(self, o: "Opportunity") -> None:
+        """Lote 3b/3c: resultado da validação per-blueprint, gravado AO VALIDAR.
+        Leva a oferta (preço) e a referência contra as quais foi feita — uma
+        retomada só reaproveita se ambas forem idênticas."""
+        if not self._ensure_open():
+            return
+        self._write({
+            "_type": "validation",
+            "product_id": o.listing.product_id,
+            "blueprint_id": o.listing.blueprint_id,
+            "seller": o.listing.seller_username,
+            "validated_at": o.validated_at or now_iso(),
+            "reused": o.validation_reused,
+            "offer_price_brl": o.ct_price_brl,
+            "ref_brl": o.tcg_market_brl,
+            "validation_status": o.validation_status,
+            "live_price_brl": o.live_price_brl,
+            "markup_pct": o.markup_pct,
+            "markup_tier": o.markup_tier,
+            "real_margin_pct": o.real_margin_pct,
+            "real_net_margin_pct": o.real_net_margin_pct,
+            "real_lucro_brl": o.real_lucro_brl,
+        })
+
+    def write_validation_complete(self) -> None:
+        """Marca que a validação deste run terminou — um run assim nunca é fonte
+        de reaproveitamento."""
+        if self._ensure_open():
+            self._write({"_type": "validation_complete", "stamp": now_iso()})
+
+    @staticmethod
+    def _read_validations(path: Path) -> dict:
+        """Validações de um checkpoint ARQUIVADO — vazio se aquele run concluiu
+        a validação (só run que NÃO terminou é fonte de retomada)."""
+        out: dict = {}
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                for raw in fh:
+                    try:
+                        rec = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    typ = rec.get("_type")
+                    if typ == "validation_complete":
+                        return {}
+                    if typ == "validation":
+                        out[f"{rec.get('product_id')}:{rec.get('seller')}"] = rec
+        except OSError:
+            return {}
+        return out
+
+    def load_validations(self, max_age_hours: float) -> dict:
+        """Validações reaproveitáveis neste run: SÓ as do run anterior
+        interrompido e SÓ com --resume-validation (idade <= max_age_hours).
+        Sem a flag, sempre vazio."""
+        out: dict = {}
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+        for key, rec in self._prior_validations.items():
+            try:
+                ts = datetime.fromisoformat(rec["validated_at"])
+                if ts.tzinfo is None:
+                    ts = ts.astimezone()
+            except (KeyError, ValueError, TypeError):
+                continue
+            if ts >= cutoff:
+                out[key] = rec
+        return out
 
     def write_scan_complete(self, total_opps: int, total_elapsed_s: float) -> None:
         if not self.enabled:
@@ -3246,7 +3506,9 @@ class Scanner:
 
     def _check_set_timeout(self, set_start: float, exp_code: str, exp_name: str,
                             stage: str, timeout_s: Optional[float] = None) -> bool:
-        """Retorna True se set deve abortar. Loga + marca skip-list quando True.
+        """Retorna True se set deve abortar. Timeout é FALHA OPERACIONAL: nunca
+        entra na skip-list (Lote 3) — o set aparece como "não concluído, tentar
+        de novo".
         v2.8 (Codex H2): chamado antes de cada call externa do set.
         v2.14: aceita timeout_s explícito (o EFETIVO do set, c/ override). Quando
         None, cai no self.per_set_timeout_s (retrocompat p/ chamadas diretas)."""
@@ -3258,23 +3520,174 @@ class Scanner:
             log.error(
                 f"  ⏱️  TIMEOUT set {exp_code} ({exp_name}) at stage='{stage}': "
                 f"{elapsed/60:.1f}min > {effective/60:.1f}min limite. "
-                f"Abortando."
+                f"Abortando (falha operacional — NÃO vai pra skip-list)."
             )
             self.stats["expansions_timed_out"] += 1
-            try:
-                add_to_skip_list(
-                    exp_code,
-                    f"per_set_timeout_{int(effective)}s_at_{stage}",
-                )
-            except Exception as e:
-                log.warning(f"  Falha ao gravar skip-list ({exp_code}): {e}")
+            self._set_outcome("operational_failure",
+                              f"per_set_timeout_{int(effective)}s_at_{stage}")
             return True
         return False
+
+    # ── Lote 3: desfecho por set ───────────────────────────────────────────
+    def _set_outcome(self, status: str, reason: Optional[str] = None,
+                     note: Optional[str] = None) -> None:
+        """status ∈ complete | no_coverage | operational_failure."""
+        self._set_status = status
+        self._set_reason = reason
+        if note is not None:
+            self._set_note = note
+
+    def _record_unpriced(self, exp_code: str, listings: list["Listing"],
+                         causes: dict, detail: Optional[str]) -> None:
+        """Guarda cada listing sem referência (nada some em silêncio)."""
+        if not hasattr(self, "unpriced_rows"):
+            self.unpriced_rows = []
+        accounted = self.__dict__.setdefault("_set_accounted", set())
+        for l in listings:
+            accounted.add(l.uid)
+            cause = causes.get(l.uid, "not_reached")
+            reason = {"miss": "sem_cobertura", "failure": "falha_operacional",
+                      "not_reached": "nao_alcancado"}.get(cause, cause)
+            row = {
+                "set": exp_code, "set_name": l.set_name, "card": l.card_name,
+                "number": l.collector_number, "ct_price_brl": round(l.price_brl, 2),
+                "seller": l.seller_username, "link": l.cardtrader_url,
+                "reason": reason, "detail": detail or "",
+            }
+            self.unpriced_rows.append(row)
+            cp = getattr(self, "_checkpoint", None)
+            if cp is not None:
+                cp.write_unpriced(row)
+
+    def _flush_unaccounted(self, exp_code: str, reason: Optional[str]) -> None:
+        """Lote 3c: set interrompido no meio (exceção/Ctrl-C) — toda oferta que
+        ainda não virou oportunidade nem linha "Sem preço" vai pra "Sem preço"
+        com motivo operacional (e pro checkpoint). A soma precificadas + sem
+        preço = total vale também aqui."""
+        accounted = self.__dict__.setdefault("_set_accounted", set())
+        left = [l for l in getattr(self, "_set_all", []) if l.uid not in accounted]
+        if not left:
+            return
+        self._record_unpriced(exp_code, left, {l.uid: "failure" for l in left}, reason)
+        self._set_unpriced = (self._set_unpriced or 0) + len(left)
+        log.warning(f"  ⚠️  {exp_code}: {len(left)} listings não alcançados após a "
+                    f"interrupção ({reason}) — listados na aba 'Sem preço'")
+
+    def _rescue_via_tcgcsv(self, exp_code: str, exp_name: str,
+                           listings: list["Listing"]):
+        """Reprecifica `listings` via tcgcsv (referência buscada NESTE run, mesma
+        escada de variante). Retorna (opps, uids_precificados, status_do_prefill)
+        com status ∈ ok | no_group (a fonte respondeu sem dados) | fetch_failed
+        (falha operacional). Os uids contam
+        como resolvidos mesmo se `_build_opportunity` descartar a linha por
+        filtro explícito (--opportunities-only/--chase-only)."""
+        set_name = listings[0].set_name if listings else ""
+        ok = self.tcgcsv.prefill_set(exp_code, self._ptcg_setcodes_for(exp_code), set_name)
+        if not ok:
+            log.warning(
+                f"  tcgcsv sem referência p/ {exp_code} "
+                f"({getattr(self.tcgcsv, 'last_prefill_status', '?')}) — "
+                f"{len(listings)} listings seguem sem preço"
+            )
+            return [], set(), getattr(self.tcgcsv, "last_prefill_status", None) or "no_group"
+        out: list["Opportunity"] = []
+        handled: set = set()
+        for l in listings:
+            try:
+                price = self.tcgcsv.market_price_usd(
+                    l.card_name, l.set_code, l.collector_number,
+                    foil=l.foil, rarity=l.rarity,
+                )
+            except Exception as e:  # noqa: BLE001
+                log.debug(f"  tcgcsv pricing falhou {l.card_name}: {e!r}")
+                continue
+            if not price or price <= 0:
+                continue
+            handled.add(l.uid)
+            opp = self._build_opportunity(l, price, self.tcgcsv)
+            if opp is not None:
+                out.append(opp)
+        if handled:
+            self.stats["tcgcsv_fallback_sets"] = self.stats.get("tcgcsv_fallback_sets", 0) + 1
+            self.stats["tcgcsv_fallback_priced"] = self.stats.get("tcgcsv_fallback_priced", 0) + len(handled)
+            log.info(
+                f"  🛟 tcgcsv precificou {len(handled)} de {len(listings)} listings "
+                f"sem preço da fonte principal em {exp_code} ({exp_name})"
+            )
+        return out, handled, "ok"
+
+    def _conclude_set(self, exp_code: str, exp_name: str, pending: list["Listing"],
+                      causes: dict, total: int, hits: int,
+                      abort_kind: Optional[str] = None,
+                      abort_reason: Optional[str] = None):
+        """Fecha o set: resgata via tcgcsv o que a fonte principal não precificou
+        (misses, falhas e o que não foi alcançado), registra o que ficou sem
+        preço e define o desfecho. Generator: yield das Opportunities resgatadas.
+
+        Desfechos: complete (tudo precificado) · complete_with_unpriced (o set foi
+        coberto; N ofertas ficaram sem referência e estão na aba "Sem preço") ·
+        no_coverage (a fonte respondeu e NADA do set foi precificado) ·
+        operational_failure (rede/5xx/timeout/erro — tentar de novo).
+
+        abort_kind: None (fim natural) | "operational" (timeout/mass failure) |
+        "coverage" (corte por misses consecutivos). Skip-list SÓ no corte por
+        cobertura quando o desfecho é no_coverage de verdade (nada precificado,
+        nem pelo resgate) e o resgate NÃO falhou."""
+        handled: set = set()
+        rescue_status = None
+        if pending and self._tcgcsv_can_fallback():
+            opps, handled, rescue_status = self._rescue_via_tcgcsv(exp_code, exp_name, pending)
+            yield from opps
+        self.__dict__.setdefault("_set_accounted", set()).update(handled)
+        left = [l for l in pending if l.uid not in handled]
+        rescued = len(handled)
+        if rescued:
+            self._set_note = f"tcgcsv_rescue_priced_{rescued}_of_{len(pending)}"
+        fail_left = [l for l in left if causes.get(l.uid) == "failure"]
+        priced_total = hits + rescued
+        if abort_kind == "operational":
+            status, reason = "operational_failure", abort_reason
+        elif left and rescue_status == "fetch_failed":
+            # o resgate não pôde rodar: não dá pra afirmar ausência de cobertura
+            status, reason = "operational_failure", "tcgcsv_rescue_fetch_failed"
+        elif fail_left:
+            status, reason = "operational_failure", f"pricing_failures_{len(fail_left)}_unrescued"
+        elif not left:
+            status, reason = "complete", None
+        elif priced_total == 0:
+            status = "no_coverage"
+            reason = abort_reason or f"{len(left)}_of_{total}_without_reference"
+        else:
+            status, reason = "complete_with_unpriced", f"{len(left)}_of_{total}_without_reference"
+        self._set_outcome(status, reason)
+        self._set_unpriced = len(left)
+        if left:
+            self._record_unpriced(exp_code, left, causes, reason)
+            log.warning(
+                f"  ⚠️  {exp_code}: {len(left)} de {total} listings SEM preço "
+                f"({status}{': ' + reason if reason else ''}) — listados na aba 'Sem preço'"
+            )
+        if status != "operational_failure":
+            self.stats["expansions_scanned"] += 1
+        if abort_kind == "coverage" and status == "no_coverage":
+            self.stats["expansions_no_coverage_abort"] += 1
+            try:
+                add_to_skip_list(exp_code, abort_reason or "no_coverage")
+            except Exception as ee:
+                log.warning(f"  Falha ao gravar skip-list ({exp_code}): {ee}")
 
     def scan_expansion(self, expansion: dict) -> Iterator[Opportunity]:
         exp_id = expansion["id"]
         exp_code = expansion.get("code", "")
         exp_name = expansion.get("name", "")
+        # Lote 3: desfecho do set (lido por scan() p/ o set_complete e o resumo)
+        self._set_status: str = "complete"
+        self._set_reason: Optional[str] = None
+        self._set_unpriced: int = 0
+        self._set_total: int = 0
+        self._set_note: Optional[str] = None
+        self._set_all: list = []
+        self._set_accounted: set = set()
         log.info(f"→ Scan: {exp_name} ({exp_code}) [id={exp_id}]")
         # v2.4: marca início pra wall-clock timeout no pricing loop
         set_start = time.monotonic()
@@ -3307,13 +3720,8 @@ class Scanner:
         except TimeoutError as e:
             log.error(f"  ⏱️  CT blueprints timeout para {exp_code}: {e}")
             self.stats["expansions_timed_out"] += 1
-            try:
-                add_to_skip_list(
-                    exp_code,
-                    f"ct_blueprints_timeout_{int(effective_timeout_s or 0)}s",
-                )
-            except Exception as ee:
-                log.warning(f"  Falha ao gravar skip-list ({exp_code}): {ee}")
+            self._set_outcome("operational_failure",
+                              f"ct_blueprints_timeout_{int(effective_timeout_s or 0)}s")
             return
         bp_index = {bp["id"]: bp for bp in blueprints}
         log.info(f"  {len(blueprints)} blueprints carregados")
@@ -3335,13 +3743,8 @@ class Scanner:
         except TimeoutError as e:
             log.error(f"  ⏱️  CT listings timeout para {exp_code}: {e}")
             self.stats["expansions_timed_out"] += 1
-            try:
-                add_to_skip_list(
-                    exp_code,
-                    f"ct_listings_timeout_{int(effective_timeout_s or 0)}s",
-                )
-            except Exception as ee:
-                log.warning(f"  Falha ao gravar skip-list ({exp_code}): {ee}")
+            self._set_outcome("operational_failure",
+                              f"ct_listings_timeout_{int(effective_timeout_s or 0)}s")
             return
         self.stats["listings_fetched"] += len(raw_listings)
         log.info(f"  {len(raw_listings)} listings {lang.upper()} encontrados")
@@ -3377,43 +3780,63 @@ class Scanner:
         log.info(f"  {len(best_by_uid)} listings após filtros (NM, {lang.upper()}, não-graded, ≥${self.min_price_usd})")
 
         # v2.26: provider PRIMÁRIO tcgcsv é bulk-por-set — sem prefill, todo
-        # market_price_usd devolve None e o set inteiro viraria miss (40 misses
-        # → abort no_coverage injusto). Prefill 1× por set (idempotente).
-        # Se o set NÃO resolve no tcgcsv (sem groupId único / sem dados),
-        # aborta o set SEM gravar skip-list: no_coverage_* é PERMANENTE e o
-        # gap aqui é do tcgcsv, não do set — gravar condenaria o set também
-        # pros runs pokemontcg, que podem cobri-lo normalmente. O set sai
-        # rotulado sem referência de preço; nunca inventado.
+        # market_price_usd devolve None. Lote 3: distingue lacuna da FONTE
+        # ("no_group": o tcgcsv respondeu e não tem o set → no_coverage, sem
+        # skip-list) de FALHA OPERACIONAL ("fetch_failed": rede/5xx → tentar de
+        # novo). Em ambos os casos os listings ficam registrados (aba "Sem preço").
+        all_listings = list(best_by_uid.values())
+        self._set_total = len(all_listings)
+        self._set_all = all_listings
         if isinstance(self.pricing, TcgCsvFallbackProvider) and best_by_uid:
-            first_listing = next(iter(best_by_uid.values()))
+            first_listing = all_listings[0]
             if not self.pricing.prefill_set(
                 exp_code, self._ptcg_setcodes_for(exp_code),
                 first_listing.set_name or exp_name,
             ):
-                log.warning(
-                    f"  🕳️  tcgcsv (primário) sem groupId único/dados p/ "
-                    f"{exp_code} ({exp_name}) — set sem referência de preço "
-                    f"neste run (skip-list NÃO gravada: gap é do tcgcsv, "
-                    f"não do set)."
-                )
-                self.stats["expansions_no_coverage_abort"] += 1
+                st = getattr(self.pricing, "last_prefill_status", None)
+                if st == "fetch_failed":
+                    log.warning(
+                        f"  🔌 tcgcsv (primário) FALHOU ao buscar {exp_code} "
+                        f"({exp_name}) — falha operacional, tentar de novo."
+                    )
+                    yield from self._conclude_set(
+                        exp_code, exp_name, all_listings, {}, len(all_listings), 0,
+                        abort_kind="operational", abort_reason="tcgcsv_fetch_failed")
+                else:
+                    log.warning(
+                        f"  🕳️  tcgcsv (primário) sem groupId único/dados p/ "
+                        f"{exp_code} ({exp_name}) — set sem referência de preço "
+                        f"neste run (skip-list NÃO gravada: gap é do tcgcsv, "
+                        f"não do set)."
+                    )
+                    self.stats["expansions_no_coverage_abort"] += 1
+                    yield from self._conclude_set(
+                        exp_code, exp_name, all_listings,
+                        {l.uid: "miss" for l in all_listings}, len(all_listings), 0,
+                        abort_reason="tcgcsv_primary_no_group_id")
                 return
 
         # Para cada listing filtrado, busca preço TCG e calcula margem
-        total_listings = len(best_by_uid)
+        total_listings = len(all_listings)
         # v2.9 (Codex H5): contadores per-set pra detectar mass pricing failure
         set_pricing_attempts = 0
         set_pricing_failures = 0
         # v2.13 (frente eficiência): contador de "misses" consecutivos (preço
         # não encontrado na fonte) pra cortar sets sem cobertura cedo.
         set_consecutive_misses = 0
-        # v2.23: total de hits pokemontcg no set + lista de listings sem preço.
-        # O fallback tcgcsv SÓ entra quando set_tcg_hits == 0 (set inteiro sem
-        # cobertura na pokemontcg.io — caso asc). Se houve ≥1 hit, o default path
-        # segue intacto e o tcgcsv nunca roda pro set.
         set_tcg_hits = 0
+        # Lote 3: tudo que a fonte principal não precificou — misses (a fonte
+        # respondeu sem a carta) e falhas (exceção) — vai pro resgate tcgcsv e,
+        # se ainda sobrar, pra aba "Sem preço". Nada some.
         set_misses: list["Listing"] = []
-        for i, l in enumerate(best_by_uid.values(), 1):
+        set_failed: list["Listing"] = []
+        causes: dict[str, str] = {}
+
+        def _pending(upto: int) -> list["Listing"]:
+            """misses + falhas + listings ainda não alcançados (a partir de `upto`)."""
+            return set_misses + set_failed + all_listings[upto:]
+
+        for i, l in enumerate(all_listings, 1):
             # v2.4: wall-clock timeout check antes de cada call de pricing
             # v2.14: usa o timeout EFETIVO do set (com override vintage).
             if effective_timeout_s and (time.monotonic() - set_start) > effective_timeout_s:
@@ -3421,10 +3844,14 @@ class Scanner:
                 log.error(
                     f"  ⏱️  TIMEOUT set {exp_code} ({exp_name}): {elapsed/60:.1f}min "
                     f"> {effective_timeout_s/60:.1f}min limite. Abortando após "
-                    f"{i-1}/{total_listings} listings priced."
+                    f"{i-1}/{total_listings} listings priced (falha operacional — "
+                    f"NÃO vai pra skip-list)."
                 )
                 self.stats["expansions_timed_out"] += 1
-                add_to_skip_list(exp_code, f"per_set_timeout_{int(effective_timeout_s)}s_at_{i-1}_of_{total_listings}")
+                yield from self._conclude_set(
+                    exp_code, exp_name, _pending(i - 1), causes, total_listings,
+                    set_tcg_hits, abort_kind="operational",
+                    abort_reason=f"per_set_timeout_{int(effective_timeout_s)}s_at_{i-1}_of_{total_listings}")
                 return
             if i % 50 == 0 or i == total_listings:
                 log.info(f"  Pricing progress: {i}/{total_listings} listings consultados")
@@ -3438,6 +3865,7 @@ class Scanner:
                     self._checkpoint.write_progress(exp_code, i, total_listings)
             set_pricing_attempts += 1
             tcg_market = None
+            failed = False
             try:
                 tcg_market = self.pricing.market_price_usd(
                     l.card_name, l.set_code, l.collector_number,
@@ -3451,6 +3879,7 @@ class Scanner:
                 log.debug(f"  Pricing transient {l.card_name}: {type(e).__name__}: {e}")
                 set_pricing_failures += 1
                 self.stats["pricing_failures"] += 1
+                failed = True
             except Exception as e:
                 # v2.9 (Codex H5): erros DESCONHECIDOS = WARNING + counter.
                 # Pre-fix: log.debug + swallow → schema drift / SSL / JSON parse
@@ -3461,96 +3890,69 @@ class Scanner:
                 )
                 set_pricing_failures += 1
                 self.stats["pricing_failures"] += 1
-
-            # v2.9: detecção de mass pricing failure → aborta set + skip-list.
-            # Trigger só após sample mínimo pra evitar falso abort em sets
-            # com poucos cards.
-            if (
+                failed = True
+            # Lote 3b: a falha em massa é avaliada DEPOIS de contabilizar o listing
+            # atual (hit/miss/falha) — antes ela abortava antes de registrar um
+            # listing já precificado e a linha sumia.
+            mass_failure = (
                 set_pricing_attempts >= self.mass_pricing_failure_min_sample
                 and (set_pricing_failures / set_pricing_attempts) > self.mass_pricing_failure_threshold
-            ):
+            )
+            if failed:
+                set_failed.append(l)
+                causes[l.uid] = "failure"
+            elif not tcg_market or tcg_market <= 0:
+                # v2.13 (frente eficiência): conta miss consecutivo — a fonte
+                # RESPONDEU e não tem a carta (≠ falha). Cap atingido = corte do
+                # set por falta de cobertura (resgate tcgcsv antes de desistir).
+                set_consecutive_misses += 1
+                set_misses.append(l)
+                causes[l.uid] = "miss"
+                if (self.max_consecutive_misses > 0
+                        and set_consecutive_misses >= self.max_consecutive_misses):
+                    log.warning(
+                        f"  🕳️  SEM COBERTURA em {exp_code} ({exp_name}): "
+                        f"{set_consecutive_misses} listings consecutivos sem preço "
+                        f"na fonte (cap={self.max_consecutive_misses}). Cortando set "
+                        f"após {i}/{total_listings}; resgate tcgcsv p/ o restante."
+                    )
+                    yield from self._conclude_set(
+                        exp_code, exp_name, _pending(i), causes, total_listings,
+                        set_tcg_hits, abort_kind="coverage",
+                        abort_reason=(f"no_coverage_{set_consecutive_misses}_consecutive_"
+                                      f"misses_at_{i}_of_{total_listings}"))
+                    return
+            else:
+                # Hit: zera o contador de misses consecutivos.
+                set_consecutive_misses = 0
+                set_tcg_hits += 1
+                opp = self._build_opportunity(l, tcg_market, self.pricing)
+                if opp is not None:
+                    yield opp
+                else:
+                    self._set_accounted.add(l.uid)   # descartada por filtro explícito
+
+            # v2.9: mass pricing failure → falha OPERACIONAL do set (nunca skip-list).
+            if mass_failure:
                 fail_pct = set_pricing_failures / set_pricing_attempts * 100
                 log.error(
                     f"  💥 MASS PRICING FAILURE em {exp_code} ({exp_name}): "
                     f"{set_pricing_failures}/{set_pricing_attempts} ({fail_pct:.0f}%) "
-                    f"falharam. Abortando set."
+                    f"falharam. Abortando set (falha operacional — NÃO vai pra "
+                    f"skip-list)."
                 )
                 self.stats["expansions_mass_pricing_abort"] += 1
-                try:
-                    add_to_skip_list(
-                        exp_code,
-                        f"mass_pricing_failure_{set_pricing_failures}_of_{set_pricing_attempts}",
-                    )
-                except Exception as ee:
-                    log.warning(f"  Falha ao gravar skip-list ({exp_code}): {ee}")
+                yield from self._conclude_set(
+                    exp_code, exp_name, _pending(i), causes, total_listings,
+                    set_tcg_hits, abort_kind="operational",
+                    abort_reason=f"mass_pricing_failure_{set_pricing_failures}_of_{set_pricing_attempts}")
                 return
 
-            if not tcg_market or tcg_market <= 0:
-                # v2.13 (frente eficiência): conta miss consecutivo. Em sets sem
-                # cobertura na pokemontcg.io (ex: 2026 / mega evolução), centenas
-                # de listings seguidos não casam preço — cada um custa uma chamada
-                # à API (com rate limit) que sempre falha. Quando bate o cap,
-                # aborta o set e o joga na skip-list (mesma mecânica do timeout/
-                # mass-pricing-failure). Distingue-se de pricing_failure (erro de
-                # rede/exceção): aqui o request foi OK, só não há match.
-                set_consecutive_misses += 1
-                # v2.23: guarda os misses pra um eventual repasse via fallback
-                # tcgcsv (só se o SET inteiro não tiver NENHUM hit pokemontcg).
-                set_misses.append(l)
-                if (self.max_consecutive_misses > 0
-                        and set_consecutive_misses >= self.max_consecutive_misses):
-                    # v2.23: ANTES de abortar por "sem cobertura", tenta o
-                    # FALLBACK tcgcsv — MAS só se a pokemontcg.io não deu NENHUM
-                    # hit no set inteiro até aqui (set_tcg_hits == 0). Esse é
-                    # exatamente o cenário asc/Ascended Heroes: a pokemontcg.io
-                    # lista as cartas mas sem preço → todo listing vira miss → o
-                    # set estouraria e cairia na skip-list, ficando invisível.
-                    # Sets que a pokemontcg.io JÁ precifica (set_tcg_hits > 0)
-                    # nunca chegam aqui com hits==0 → o default path fica intacto.
-                    if set_tcg_hits == 0 and self._tcgcsv_can_fallback():
-                        # Reprecifica o SET INTEIRO (todos os listings filtrados),
-                        # não só os misses até aqui — o set é precisamente o que a
-                        # pokemontcg.io não cobre (asc), então o tcgcsv assume tudo.
-                        fb_opps = self._price_set_via_tcgcsv(
-                            exp_code, exp_name, list(best_by_uid.values())
-                        )
-                        if fb_opps:
-                            self.stats["expansions_scanned"] += 1
-                            yield from fb_opps
-                            return
-                    log.warning(
-                        f"  🕳️  SEM COBERTURA em {exp_code} ({exp_name}): "
-                        f"{set_consecutive_misses} listings consecutivos sem preço "
-                        f"na fonte (cap={self.max_consecutive_misses}). Abortando set "
-                        f"após {i}/{total_listings}."
-                    )
-                    self.stats["expansions_no_coverage_abort"] += 1
-                    try:
-                        add_to_skip_list(
-                            exp_code,
-                            f"no_coverage_{set_consecutive_misses}_consecutive_misses_at_{i}_of_{total_listings}",
-                        )
-                    except Exception as ee:
-                        log.warning(f"  Falha ao gravar skip-list ({exp_code}): {ee}")
-                    return
-                continue
-            # Hit: zera o contador de misses consecutivos.
-            set_consecutive_misses = 0
-            set_tcg_hits += 1
-            opp = self._build_opportunity(l, tcg_market, self.pricing)
-            if opp is not None:
-                yield opp
-
-        # v2.23: fim do set sem abort. Se a pokemontcg.io não precificou NADA no
-        # set inteiro (set_tcg_hits == 0) mas houve listings (set_misses), tenta
-        # o fallback tcgcsv pra TODOS os misses — cobre o caso asc onde o set tem
-        # poucos cards (não bate o cap de misses consecutivos antes de acabar).
-        if (set_tcg_hits == 0 and set_misses
-                and self._tcgcsv_can_fallback()):
-            fb_opps = self._price_set_via_tcgcsv(exp_code, exp_name, set_misses)
-            yield from fb_opps
-
-        self.stats["expansions_scanned"] += 1
+        # Fim natural do set: o que a fonte principal não precificou (misses do
+        # fim do set e falhas) vai pro resgate tcgcsv — também com hits prévios.
+        yield from self._conclude_set(
+            exp_code, exp_name, set_misses + set_failed, causes, total_listings,
+            set_tcg_hits)
 
     def _build_opportunity(
         self, l: "Listing", tcg_market: float, source_provider: "PricingProvider"
@@ -3639,6 +4041,8 @@ class Scanner:
             set_release_date=set_release,
             variant_low_confidence=variant_low_conf,
             below_threshold=below_threshold,
+            price_fetched_at=(lambda v: v if isinstance(v, str) else "")(
+                getattr(source_provider, "last_price_fetched_at", None)),
         )
 
     def _tcgcsv_can_fallback(self) -> bool:
@@ -3657,55 +4061,11 @@ class Scanner:
         code = (ct_set_code or "").lower()
         # v2.29: código CT de set JP que colide com setcode pokemontcg.io não
         # entra por identidade (ver CT_JP_SETCODE_COLLISIONS).
-        out = [code] if code and code not in CT_JP_SETCODE_COLLISIONS else []
+        out = ([code] if code and code not in CT_JP_SETCODE_COLLISIONS
+               and code not in CT_PTCG_ID_COLLISIONS else [])
         for alias in PokemonTcgIoProvider.SET_ALIAS_TO_PTCG.get(code, []):
             if alias.lower() not in out:
                 out.append(alias.lower())
-        return out
-
-    def _price_set_via_tcgcsv(
-        self, exp_code: str, exp_name: str, listings: list["Listing"]
-    ) -> list["Opportunity"]:
-        """v2.23: reprecifica os listings de um set via FALLBACK tcgcsv.
-
-        Chamado APENAS quando a pokemontcg.io não precificou nada no set
-        (set_tcg_hits == 0). Pré-carrega o set no provider tcgcsv (resolução de
-        groupId unique-match-only) e constrói Opportunities pros que casarem —
-        com a MESMA seleção de variante e o MESMO `_build_opportunity`. Retorna
-        [] se o set não resolve no tcgcsv (sem groupId único / sem dados) → o
-        caller segue com o abort/skip-list honesto (sem preço inventado)."""
-        set_name = listings[0].set_name if listings else ""
-        ptcg_codes = self._ptcg_setcodes_for(exp_code)
-        ok = self.tcgcsv.prefill_set(exp_code, ptcg_codes, set_name)
-        if not ok:
-            return []
-        log.info(
-            f"  🛟 FALLBACK tcgcsv ativo para {exp_code} ({exp_name}): "
-            f"pokemontcg.io sem preço pro set → reprecificando {len(listings)} "
-            f"listings via tcgcsv"
-        )
-        out: list["Opportunity"] = []
-        for l in listings:
-            try:
-                price = self.tcgcsv.market_price_usd(
-                    l.card_name, l.set_code, l.collector_number,
-                    foil=l.foil, rarity=l.rarity,
-                )
-            except Exception as e:  # noqa: BLE001
-                log.debug(f"  tcgcsv pricing falhou {l.card_name}: {e!r}")
-                continue
-            if not price or price <= 0:
-                continue
-            opp = self._build_opportunity(l, price, self.tcgcsv)
-            if opp is not None:
-                out.append(opp)
-        if out:
-            self.stats["tcgcsv_fallback_sets"] += 1
-            self.stats["tcgcsv_fallback_priced"] += len(out)
-            log.info(
-                f"  ✅ tcgcsv resgatou {len(out)} cards em {exp_code} "
-                f"(set ficaria INVISÍVEL sem o fallback)"
-            )
         return out
 
     def scan(self, expansions: list[dict],
@@ -3747,6 +4107,9 @@ class Scanner:
         # o loop inteiro se um set lançar algo inesperado.
         run_start = time.monotonic()
         total_sets = len(expansions)
+        self.set_outcomes: list[dict] = []   # Lote 3: desfecho de cada set
+        self.unpriced_rows: list[dict] = []  # Lote 3: listings sem preço (aba "Sem preço")
+        self.interrupted = False             # Lote 3c: Ctrl-C no meio do run
         for idx, exp in enumerate(expansions, 1):
             exp_code = exp.get("code", "")
             elapsed_min = (time.monotonic() - run_start) / 60.0
@@ -3768,6 +4131,11 @@ class Scanner:
             stats_pre = dict(self.stats) if checkpoint and checkpoint.enabled else None
             set_start = time.monotonic()
             opps_pre_count = len(opps)
+            # Lote 3: desfecho do set (preenchido por scan_expansion/_conclude_set;
+            # as exceções abaixo viram "operational_failure" — NUNCA skip-list).
+            self._set_status, self._set_reason = "complete", None
+            self._set_unpriced, self._set_note, self._set_total = 0, None, 0
+            self._set_all, self._set_accounted = [], set()
             try:
                 # v2.6: itera o generator e escreve cada Opportunity no checkpoint
                 # ASSIM QUE for yielded. Antes era `opps.extend(scan_expansion(exp))`
@@ -3775,21 +4143,47 @@ class Scanner:
                 # tudo em crash mid-set. Agora: live append-only.
                 for opp in self.scan_expansion(exp):
                     opps.append(opp)
+                    self._set_accounted.add(opp.listing.uid)
                     if checkpoint:
                         checkpoint.write_opportunity(opp)
             except requests.HTTPError as e:
-                log.error(f"Falha em {exp.get('name')}: {e}")
-                # Não emite set_complete em falha — recovery vai mostrar lacuna
-                continue
+                code = getattr(getattr(e, "response", None), "status_code", "")
+                log.error(f"Falha em {exp.get('name')}: {e} (falha operacional — tentar de novo)")
+                self._set_outcome("operational_failure", f"http_error_{code}")
+            except requests.RequestException as e:
+                # Lote 3: rede/5xx/timeout da CT = FALHA OPERACIONAL do run, não
+                # fato do set → nunca vai pra skip-list; aparece no resumo.
+                log.error(
+                    f"Falha de rede em {exp.get('name')} ({exp_code}): "
+                    f"{type(e).__name__}: {e}. Falha operacional — tentar de novo."
+                )
+                self._set_outcome("operational_failure", f"network_error_{type(e).__name__}")
             except Exception as e:
-                # v2.5.1: nunca deixa exceção genérica matar o full scan
+                # v2.5.1: nunca deixa exceção genérica matar o full scan.
+                # Lote 3: também falha operacional (não é ausência de cobertura).
                 log.error(
                     f"Erro inesperado em {exp.get('name')} ({exp_code}): "
-                    f"{type(e).__name__}: {e}. Continuando próximos sets."
+                    f"{type(e).__name__}: {e}. Falha operacional — tentar de novo."
                 )
-                add_to_skip_list(exp_code, f"unexpected_error_{type(e).__name__}")
-                continue
-            # v2.6: set completou sem exception → emite set_complete com DIFFs
+                self._set_outcome("operational_failure", f"unexpected_error_{type(e).__name__}")
+            except KeyboardInterrupt:
+                # Lote 3c: Ctrl-C no meio do set — registra, não perde o que já
+                # foi coletado; o main escreve o parcial e sai com código != 0.
+                log.error(f"Interrompido pelo operador em {exp.get('name')} ({exp_code}) — "
+                          f"gravando o que já foi coletado.")
+                self._set_outcome("operational_failure", "interrupted_by_user")
+                self.interrupted = True
+            if self._set_status == "operational_failure":
+                # nada some: o que o set ainda não tinha contabilizado vai pra "Sem preço"
+                self._flush_unaccounted(exp_code, self._set_reason)
+                self.stats["expansions_operational_failure"] = self.stats.get("expansions_operational_failure", 0) + 1
+            self.set_outcomes.append({
+                "set": exp_code, "name": exp.get("name", ""),
+                "status": self._set_status, "reason": self._set_reason,
+                "unpriced": self._set_unpriced, "total": self._set_total,
+                "note": self._set_note,
+            })
+            # v2.6: emite set_complete (agora para TODO desfecho) com DIFFs
             if checkpoint and checkpoint.enabled and stats_pre is not None:
                 per_set_stats = {
                     "blueprints": 0,  # sem stat agregado de blueprints; deixar 0
@@ -3802,13 +4196,174 @@ class Scanner:
                     set_name=exp.get("name", ""),
                     per_set_stats=per_set_stats,
                     elapsed_s=time.monotonic() - set_start,
+                    status=self._set_status,
+                    reason=self._set_reason,
+                    unpriced=self._set_unpriced,
+                    note=self._set_note,
                 )
+            if self.interrupted:
+                # sets que nem começaram: operational_failure "não iniciado"
+                for rest in expansions[idx:]:
+                    rc = rest.get("code", "")
+                    self.set_outcomes.append({
+                        "set": rc, "name": rest.get("name", ""),
+                        "status": "operational_failure", "reason": "interrupted_not_started",
+                        "unpriced": 0, "total": 0, "note": None})
+                    self.stats["expansions_operational_failure"] = self.stats.get("expansions_operational_failure", 0) + 1
+                    if checkpoint and checkpoint.enabled:
+                        checkpoint.write_set_complete(
+                            set_code=rc, set_name=rest.get("name", ""),
+                            per_set_stats={}, elapsed_s=0.0,
+                            status="operational_failure", reason="interrupted_not_started")
+                break
+        # Lote 3: resumo do run — falha operacional NÃO some.
+        op = [o for o in self.set_outcomes if o["status"] == "operational_failure"]
+        nc = [o for o in self.set_outcomes if o["status"] == "no_coverage"]
+        cu = [o for o in self.set_outcomes if o["status"] == "complete_with_unpriced"]
+        self.stats["sets_operational_failure"] = (
+            "; ".join(f"{o['set']}: {o['reason']}" for o in op) or "(nenhum)")
+        self.stats["sets_no_coverage"] = (
+            "; ".join(f"{o['set']}: {o['unpriced']}/{o['total']} sem preço" for o in nc)
+            or "(nenhum)")
+        self.stats["sets_complete_with_unpriced"] = (
+            "; ".join(f"{o['set']}: {o['unpriced']}/{o['total']} sem preço" for o in cu)
+            or "(nenhum)")
+        self.stats["listings_sem_preco"] = len(self.unpriced_rows)
+        for line in self.run_summary_lines():
+            log.warning(line) if ("tentar de novo" in line) else log.info(line)
         # Ordena por margem bruta desc (maior oportunidade primeiro)
         opps.sort(key=lambda o: o.margin_pct, reverse=True)
         return opps
 
-    def validate_per_blueprint(self, opps: list[Opportunity], top_n: int = 30) -> None:
-        """Fase 3 / v2.0 — Valida top N candidatos via endpoint per-blueprint.
+    def run_summary_lines(self) -> list[str]:
+        """Resumo do run pelos QUATRO desfechos (Lote 3b): completo · completo com
+        N sem preço (set coberto; ofertas sem referência na aba "Sem preço") ·
+        sem cobertura (a fonte respondeu e NADA do set foi precificado) · falha
+        operacional ("não concluído, tentar de novo")."""
+        outs = getattr(self, "set_outcomes", [])
+        op = [o for o in outs if o["status"] == "operational_failure"]
+        nc = [o for o in outs if o["status"] == "no_coverage"]
+        cu = [o for o in outs if o["status"] == "complete_with_unpriced"]
+        ok = [o for o in outs if o["status"] == "complete"]
+        lines = [f"Sets: {len(ok)} completos | {len(cu)} completos com sem preço | "
+                 f"{len(nc)} sem cobertura | {len(op)} com falha operacional"]
+        if op:
+            lines.append("⚠️ NÃO CONCLUÍDOS — tentar de novo (falha operacional): " +
+                         ", ".join(f"{o['set']} ({o['reason']})" for o in op))
+        if nc:
+            lines.append("Sem cobertura (a fonte respondeu e não tem as cartas do set): " +
+                         ", ".join(f"{o['set']} ({o['unpriced']}/{o['total']})" for o in nc))
+        if cu:
+            def _frac(o):
+                priced = o["total"] - o["unpriced"]
+                return f"{o['set']} ({priced}/{o['total']} precificadas, {o['unpriced']} sem preço)"
+            lines.append("Completos com listings sem preço (aba 'Sem preço'): " +
+                         ", ".join(_frac(o) for o in cu))
+            low = [o for o in cu if o["total"] and (o["total"] - o["unpriced"]) * 2 < o["total"]]
+            if low:
+                lines.append("⚠️ ABAIXO DE METADE precificada (cobertura fraca — conferir antes de confiar): " +
+                             ", ".join(f"{o['set']} ({o['total'] - o['unpriced']}/{o['total']})" for o in low))
+        n = len(getattr(self, "unpriced_rows", []))
+        if n:
+            lines.append(f"{n} listings sem preço — ver aba 'Sem preço' do XLSX")
+        return lines
+
+    def _enrich_validation(self, o: "Opportunity", listings) -> None:
+        """Valida UMA oportunidade contra os listings per-blueprint já buscados."""
+        seller = o.listing.seller_username
+        o.validated_at, o.validation_reused = now_iso(), False
+        if listings is None:
+            o.validation_status = "API_ERROR"
+            return
+        # v2.19 (2026-06-21): casar o listing per-blueprint pela MESMA
+        # condição (NM) E mesmo reverse/variante do listing que o scan achou
+        # — não só pelo vendedor. Antes pegava o PRIMEIRO listing do vendedor
+        # (qualquer condição/variante): um vendedor com uma cópia Poor barata
+        # OU a versão não-reverse "contaminava" a validação. Caso real
+        # Shiftry hl: scan achou a NM reverse (~R$140), mas a validação casava
+        # a Poor não-reverse do mesmo vendedor (R$46,46) → comparava preço de
+        # carta Poor contra referência reverse → falso "79%". Agora exige
+        # condition == o.listing.condition (Near Mint) e reverse igual; entre
+        # os que batem, pega o MAIS BARATO (melhor oferta daquele vendedor
+        # naquela exata variante/condição). Se nenhum bate → STALE honesto
+        # (a cópia exata que o scan viu sumiu), em vez de casar a errada.
+        def _variant_matches(listing_dict) -> bool:
+            p = (listing_dict.get("properties_hash")
+                 or listing_dict.get("properties") or {})
+            cond = p.get("condition", "")
+            is_rev = bool(p.get("pokemon_reverse", False)
+                          or p.get("mtg_foil", False)
+                          or p.get("foil", False))
+            return cond == o.listing.condition and is_rev == bool(o.listing.foil)
+
+        seller_matches = [
+            l for l in listings
+            if (l.get("user") or {}).get("username") == seller
+            and _variant_matches(l)
+        ]
+        match = (min(seller_matches, key=lambda l: l.get("price_cents", float("inf")))
+                 if seller_matches else None)
+        if not match:
+            # STALE: vendedor não tem mais a cópia na MESMA condição+variante
+            # que o scan achou (ou só tinha outra condição/variante).
+            o.validation_status = "STALE"
+            return
+        # Live BRL (per-blueprint sempre retorna na moeda da conta = BRL pra Matheus,
+        # mas tratamos as 3 moedas pra robustez)
+        live_cents = match.get("price_cents", 0)
+        live_currency = (match.get("price_currency") or "BRL").upper()
+        if live_currency == "BRL":
+            live_brl = live_cents / 100.0
+        elif live_currency == "EUR":
+            live_brl = (live_cents / 100.0) * self.eur_brl
+        elif live_currency == "USD":
+            live_brl = (live_cents / 100.0) * self.usd_brl
+        else:
+            o.validation_status = "API_ERROR"
+            return
+
+        o.live_price_brl = live_brl
+        markup = (live_brl - o.ct_price_brl) / o.ct_price_brl if o.ct_price_brl > 0 else 0.0
+        o.markup_pct = markup
+        # Classificação tier (com base no padrão observado 2026-04-29 e refinado 2026-05-11)
+        if markup < 0.02:
+            o.markup_tier = "Real (sem markup)"
+            o.validation_status = "VALIDATED_REAL"
+        elif markup < 0.12:
+            o.markup_tier = "Hub (+6%)"
+            o.validation_status = "VALIDATED_MARKUP"
+        elif markup < 0.30:
+            o.markup_tier = "non-VAT (+20%)"
+            o.validation_status = "VALIDATED_MARKUP"
+        elif markup < 0.45:
+            # 2026-05-11: tiers 30-45% (TheDragonsVault, A2Z TCG, Fun Gs)
+            # parecem legítimos — provavelmente non-Hub VAT-exempt ou
+            # categoria comissionada alta. Validados, não erro de preço.
+            o.markup_tier = f"Alto markup ({markup*100:+.0f}%)"
+            o.validation_status = "VALIDATED_MARKUP"
+        else:
+            # markup ≥45% — provavelmente preço mudou entre scan e validate
+            o.markup_tier = f"Anômalo ({markup*100:+.0f}%)"
+            o.validation_status = "PRICE_CHANGED"
+
+        # Recalc margens com preço LIVE (per-blueprint, preço de checkout).
+        # v2.12 (2026-06-06): custo real = live_brl × (1 + hub_fee_rate). Com
+        # hub_fee_rate default 0.0, custo = live_brl → margens REAIS são BRUTAS
+        # `(tcg − live)/tcg`. Operador soma Hub fee/frete/cartão/IOF por fora.
+        # (--hub-fee 0.06 reembute os 6% históricos.) Alinha com postprocess.
+        hub_fee_brl = live_brl * self.hub_fee_rate
+        custo_real = live_brl + hub_fee_brl
+        o.real_margin_pct = (o.tcg_market_brl - custo_real) / o.tcg_market_brl
+        o.real_net_margin_pct = (o.tcg_market_brl - custo_real - o.estimated_shipping_brl) / o.tcg_market_brl
+        o.real_lucro_brl = o.tcg_market_brl - custo_real - o.estimated_shipping_brl
+
+    def validate_per_blueprint(self, opps: list[Opportunity],
+                               top_n: Optional[int] = None,
+                               checkpoint: Optional["CheckpointWriter"] = None) -> None:
+        """Fase 3 / v2.0 — Valida candidatos via endpoint per-blueprint.
+
+        Lote 3: `top_n=None` (padrão e canônico) valida TODAS as oportunidades
+        elegíveis; um inteiro limita aos N de maior margem bruta (quem quiser).
 
         A API CT retorna preços diferentes nos endpoints per-expansion (RAW do
         seller, sem markup) e per-blueprint (preço FINAL com markup CT embutido,
@@ -3830,111 +4385,56 @@ class Scanner:
             return
         # Top N por margem bruta (a mesma ordem do scan default)
         sorted_opps = sorted(opps, key=lambda o: o.margin_pct, reverse=True)
-        candidates = sorted_opps[:top_n]
+        candidates = sorted_opps if top_n is None else sorted_opps[:top_n]
         unique_bp_ids = {o.listing.blueprint_id for o in candidates}
         log.info(f"v2.0: validando top {len(candidates)} candidatos ({len(unique_bp_ids)} blueprints únicos) per-blueprint...")
 
-        # Cache resultado per-blueprint (uma chamada por bp_id, mesmo se múltiplos sellers do mesmo card)
-        bp_listings: dict[int, Optional[list[dict]]] = {}
-        for bp_id in unique_bp_ids:
+        # Lote 3c: retomada SÓ com --resume-validation, de run que não terminou,
+        # com a MESMA oferta e a MESMA referência; o resto vai à API.
+        cached = checkpoint.load_validations(VALIDATION_RESUME_MAX_AGE_H) if checkpoint else {}
+        reused = 0
+        by_bp: dict[int, list[Opportunity]] = {}
+        for o in candidates:
+            rec = cached.get(validation_key(o))
+            if rec and validation_record_matches(o, rec):
+                apply_validation_record(o, rec, reused=True)
+                reused += 1
+                if checkpoint is not None:   # o checkpoint NOVO também carrega (retomável de novo)
+                    checkpoint.write_validation(o)
+            else:
+                by_bp.setdefault(o.listing.blueprint_id, []).append(o)
+        if reused:
+            log.info(f"Validação per-blueprint: {reused} candidatos reaproveitados do "
+                     f"checkpoint (≤ {VALIDATION_RESUME_MAX_AGE_H}h); {len(candidates) - reused} a validar")
+
+        total_bp = len(by_bp)
+        errors = 0
+        done = reused
+        rl0 = getattr(self.ct, "rate_limit_hits", 0)
+        rl0 = rl0 if isinstance(rl0, (int, float)) else 0
+        for n, (bp_id, group) in enumerate(by_bp.items(), 1):
             try:
                 listings = self.ct.list_listings_by_blueprint(bp_id, language=self.language)
                 if isinstance(listings, dict):
                     listings = [l for sub in listings.values() for l in sub]
-                bp_listings[bp_id] = listings
             except Exception as e:
                 log.warning(f"v2.0: per-blueprint falhou bp={bp_id}: {e}")
-                bp_listings[bp_id] = None
+                listings = None
+                errors += 1
+            for o in group:
+                self._enrich_validation(o, listings)
+                done += 1
+                # API_ERROR não é gravado: numa retomada o candidato é refeito.
+                if checkpoint is not None and o.validation_status != "API_ERROR":
+                    checkpoint.write_validation(o)
+            if n % VALIDATION_PROGRESS_EVERY == 0 or n == total_bp:
+                rl = getattr(self.ct, "rate_limit_hits", 0)
+                rl = (rl if isinstance(rl, (int, float)) else 0) - rl0
+                log.info(f"Validação per-blueprint: {n}/{total_bp} blueprints | "
+                         f"{done}/{len(candidates)} candidatos | erros {errors} | 429 {int(rl)}")
 
-        # Enriquece cada candidato
-        for o in candidates:
-            bp_id = o.listing.blueprint_id
-            seller = o.listing.seller_username
-            listings = bp_listings.get(bp_id)
-            if listings is None:
-                o.validation_status = "API_ERROR"
-                continue
-            # v2.19 (2026-06-21): casar o listing per-blueprint pela MESMA
-            # condição (NM) E mesmo reverse/variante do listing que o scan achou
-            # — não só pelo vendedor. Antes pegava o PRIMEIRO listing do vendedor
-            # (qualquer condição/variante): um vendedor com uma cópia Poor barata
-            # OU a versão não-reverse "contaminava" a validação. Caso real
-            # Shiftry hl: scan achou a NM reverse (~R$140), mas a validação casava
-            # a Poor não-reverse do mesmo vendedor (R$46,46) → comparava preço de
-            # carta Poor contra referência reverse → falso "79%". Agora exige
-            # condition == o.listing.condition (Near Mint) e reverse igual; entre
-            # os que batem, pega o MAIS BARATO (melhor oferta daquele vendedor
-            # naquela exata variante/condição). Se nenhum bate → STALE honesto
-            # (a cópia exata que o scan viu sumiu), em vez de casar a errada.
-            def _variant_matches(listing_dict) -> bool:
-                p = (listing_dict.get("properties_hash")
-                     or listing_dict.get("properties") or {})
-                cond = p.get("condition", "")
-                is_rev = bool(p.get("pokemon_reverse", False)
-                              or p.get("mtg_foil", False)
-                              or p.get("foil", False))
-                return cond == o.listing.condition and is_rev == bool(o.listing.foil)
-
-            seller_matches = [
-                l for l in listings
-                if (l.get("user") or {}).get("username") == seller
-                and _variant_matches(l)
-            ]
-            match = (min(seller_matches, key=lambda l: l.get("price_cents", float("inf")))
-                     if seller_matches else None)
-            if not match:
-                # STALE: vendedor não tem mais a cópia na MESMA condição+variante
-                # que o scan achou (ou só tinha outra condição/variante).
-                o.validation_status = "STALE"
-                continue
-            # Live BRL (per-blueprint sempre retorna na moeda da conta = BRL pra Matheus,
-            # mas tratamos as 3 moedas pra robustez)
-            live_cents = match.get("price_cents", 0)
-            live_currency = (match.get("price_currency") or "BRL").upper()
-            if live_currency == "BRL":
-                live_brl = live_cents / 100.0
-            elif live_currency == "EUR":
-                live_brl = (live_cents / 100.0) * self.eur_brl
-            elif live_currency == "USD":
-                live_brl = (live_cents / 100.0) * self.usd_brl
-            else:
-                o.validation_status = "API_ERROR"
-                continue
-
-            o.live_price_brl = live_brl
-            markup = (live_brl - o.ct_price_brl) / o.ct_price_brl if o.ct_price_brl > 0 else 0.0
-            o.markup_pct = markup
-            # Classificação tier (com base no padrão observado 2026-04-29 e refinado 2026-05-11)
-            if markup < 0.02:
-                o.markup_tier = "Real (sem markup)"
-                o.validation_status = "VALIDATED_REAL"
-            elif markup < 0.12:
-                o.markup_tier = "Hub (+6%)"
-                o.validation_status = "VALIDATED_MARKUP"
-            elif markup < 0.30:
-                o.markup_tier = "non-VAT (+20%)"
-                o.validation_status = "VALIDATED_MARKUP"
-            elif markup < 0.45:
-                # 2026-05-11: tiers 30-45% (TheDragonsVault, A2Z TCG, Fun Gs)
-                # parecem legítimos — provavelmente non-Hub VAT-exempt ou
-                # categoria comissionada alta. Validados, não erro de preço.
-                o.markup_tier = f"Alto markup ({markup*100:+.0f}%)"
-                o.validation_status = "VALIDATED_MARKUP"
-            else:
-                # markup ≥45% — provavelmente preço mudou entre scan e validate
-                o.markup_tier = f"Anômalo ({markup*100:+.0f}%)"
-                o.validation_status = "PRICE_CHANGED"
-
-            # Recalc margens com preço LIVE (per-blueprint, preço de checkout).
-            # v2.12 (2026-06-06): custo real = live_brl × (1 + hub_fee_rate). Com
-            # hub_fee_rate default 0.0, custo = live_brl → margens REAIS são BRUTAS
-            # `(tcg − live)/tcg`. Operador soma Hub fee/frete/cartão/IOF por fora.
-            # (--hub-fee 0.06 reembute os 6% históricos.) Alinha com postprocess.
-            hub_fee_brl = live_brl * self.hub_fee_rate
-            custo_real = live_brl + hub_fee_brl
-            o.real_margin_pct = (o.tcg_market_brl - custo_real) / o.tcg_market_brl
-            o.real_net_margin_pct = (o.tcg_market_brl - custo_real - o.estimated_shipping_brl) / o.tcg_market_brl
-            o.real_lucro_brl = o.tcg_market_brl - custo_real - o.estimated_shipping_brl
+        if checkpoint is not None:
+            checkpoint.write_validation_complete()
 
         # Stats sumarizadas
         validated_real = sum(1 for o in candidates if o.validation_status == "VALIDATED_REAL")
@@ -3952,9 +4452,75 @@ class Scanner:
 #   - Aba "Stats": métricas da execução (funnel de filtragem)
 # Formatação condicional: margem >= 40% fica verde forte, <30% vermelho.
 # ══════════════════════════════════════════════════════════════════════
+VALIDATION_RESUME_MAX_AGE_H = 3   # validação gravada há mais que isso não é reaproveitada
+VALIDATION_PROGRESS_EVERY = 25    # blueprints entre linhas de progresso
+
+
+def validation_key(o: "Opportunity") -> str:
+    return f"{o.listing.product_id}:{o.listing.seller_username}"
+
+
+def validation_record_matches(o: "Opportunity", rec: dict) -> bool:
+    """Lote 3c: um registro só vale para ESTA oferta se o preço da oferta e a
+    referência forem idênticos aos da validação (registro sem eles = não vale)."""
+    try:
+        return (abs(float(rec["offer_price_brl"]) - o.ct_price_brl) < 0.005
+                and abs(float(rec["ref_brl"]) - o.tcg_market_brl) < 0.005)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def apply_validation_record(o: "Opportunity", rec: dict,
+                            reused: Optional[bool] = None) -> None:
+    """Aplica um registro `validation` do checkpoint à Opportunity, com a
+    data/hora ORIGINAL da validação. `reused=True` marca a linha como
+    REAPROVEITADA de outro run; recovery do próprio checkpoint usa o que o
+    registro diz."""
+    o.validated_at = rec.get("validated_at") or ""
+    o.validation_reused = bool(rec.get("reused", False)) if reused is None else reused
+    o.validation_status = rec.get("validation_status", o.validation_status)
+    o.live_price_brl = rec.get("live_price_brl")
+    o.markup_pct = rec.get("markup_pct")
+    o.markup_tier = rec.get("markup_tier")
+    o.real_margin_pct = rec.get("real_margin_pct")
+    o.real_net_margin_pct = rec.get("real_net_margin_pct")
+    o.real_lucro_brl = rec.get("real_lucro_brl")
+
+
+def apply_validation_filters(opps: list[Opportunity], min_net_margin: float):
+    """Lote 3 (D): aplica --min-net-margin SÓ a linhas VALIDADAS. Linha que não
+    pôde ser validada (STALE, API_ERROR, PRICE_CHANGED, NOT_VALIDATED por limite
+    de --validate-top) continua na saída com o status real — nada some por
+    causa de falha operacional. O que o operador cortou explicitamente com
+    --min-net-margin é devolvido em `dropped` e logado (não é descarte mudo).
+    Retorna (mantidas, descartadas_por_min_net)."""
+    validated = ("VALIDATED_REAL", "VALIDATED_MARKUP")
+    kept: list[Opportunity] = []
+    dropped: list[Opportunity] = []
+    for o in opps:
+        if (min_net_margin > 0 and o.validation_status in validated
+                and (o.real_net_margin_pct or 0) < min_net_margin):
+            dropped.append(o)
+        else:
+            kept.append(o)
+    by_status: dict[str, int] = {}
+    for o in kept:
+        by_status[o.validation_status] = by_status.get(o.validation_status, 0) + 1
+    log.info(f"Validação: {len(kept)} oportunidades mantidas por status: {by_status}")
+    if dropped:
+        names = "; ".join(
+            f"{o.listing.card_name} ({o.listing.set_code} {o.listing.collector_number}) "
+            f"net real {(o.real_net_margin_pct or 0):.0%}" for o in dropped)
+        log.info(
+            f"Filtro --min-net-margin {min_net_margin:.0%}: {len(dropped)} oportunidade(s) "
+            f"validada(s) abaixo do corte, removidas por pedido do operador: {names}")
+    return kept, dropped
+
+
 def export_xlsx(opportunities: list[Opportunity], stats: dict,
                 out_path: Path, usd_brl: float, eur_brl: float,
-                threshold: float, hub_fee_rate: float = 0.0) -> Path:
+                threshold: float, hub_fee_rate: float = 0.0,
+                unpriced: Optional[list] = None) -> Path:
     wb = Workbook()
 
     # Aba 1: Oportunidades
@@ -3993,6 +4559,11 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         # FIM. Honestidade real-vs-fonte: "tcgcsv" = preço de fallback (set que a
         # pokemontcg.io não precificava, ex.: asc); "pokemontcg" = caminho padrão.
         "Fonte Preço",
+        # Lote 3: data/hora em que a referência foi obtida NESTE run (APPEND).
+        "Ref. Data/Hora",
+        # Lote 3c: quando a validação per-blueprint foi feita e se foi
+        # reaproveitada de um run interrompido (APPEND no fim).
+        "Validado em", "Validação",
     ]
     ws.append(headers)
 
@@ -4037,6 +4608,10 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
             "Sim" if opp.variant_low_confidence else "",
             # v2.23: fonte do preço (proveniência). Default "pokemontcg".
             opp.price_source or "",
+            opp.price_fetched_at or "",
+            opp.validated_at or "",
+            ("reaproveitada" if opp.validation_reused
+             else "nova" if opp.validated_at else ""),
         ])
 
     # ─── Formatação ───
@@ -4123,6 +4698,20 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
             ),
         )
 
+    # Lote 3: listings SEM preço (sem cobertura / falha operacional / não
+    # alcançados) — nada some em silêncio; aba só existe quando há linhas.
+    if unpriced:
+        ws3 = wb.create_sheet("Sem preço")
+        ws3.append(["Set", "Nome do set", "Carta", "Nº", "CT R$", "Seller",
+                    "Link CardTrader", "Motivo", "Detalhe"])
+        for r in unpriced:
+            ws3.append([r.get("set"), r.get("set_name"), r.get("card"), r.get("number"),
+                        r.get("ct_price_brl"), r.get("seller"), r.get("link"),
+                        r.get("reason"), r.get("detail")])
+        for cell in ws3[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+
     # Aba 2: Stats (auditoria do funnel)
     ws2 = wb.create_sheet("Stats")
     ws2.append(["Métrica", "Valor"])
@@ -4133,7 +4722,7 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
     ws2.append(["threshold_margin", f"{threshold:.0%}"])
     ws2.append(["hub_fee_rate", f"{hub_fee_rate:.0%}"])
     ws2.append(["margin_basis", "BRUTA (sem taxa)" if hub_fee_rate <= 0 else f"líquida (+{hub_fee_rate:.0%} hub fee)"])
-    ws2.append(["scanned_at", datetime.now().isoformat(timespec="seconds")])
+    ws2.append(["scanned_at", now_iso()])
     ws2.column_dimensions["A"].width = 30
     ws2.column_dimensions["B"].width = 20
     for cell in ws2[1]:
@@ -4211,8 +4800,15 @@ def parse_args():
                    help="Limpa caches voláteis (preços TCG + FX) antes de rodar — força refresh em janelas de arbitragem urgente")
     p.add_argument("--max-expansions", type=int, default=None,
                    help="Limita o número de expansões (teste rápido)")
-    p.add_argument("--validate-top", type=int, default=0,
-                   help="v2.0: valida os top N candidatos via per-blueprint (preço REAL com markup CT). 0 = desativado. Recomendado: 30")
+    p.add_argument("--validate-top", type=int, default=None,
+                   help=("v2.0 / Lote 3: valida via per-blueprint (preço REAL com markup CT). "
+                         "PADRÃO (omitido) = TODAS as oportunidades elegíveis. "
+                         "N = só as N de maior margem bruta; 0 = desativa a validação."))
+    p.add_argument("--resume-validation", action="store_true",
+                   help=("Lote 3c: retoma a validação per-blueprint de um run INTERROMPIDO "
+                         "(mesmo --output/--state-dir): reaproveita só o que foi validado "
+                         f"há ≤ {VALIDATION_RESUME_MAX_AGE_H}h com a MESMA oferta e a MESMA referência; linha "
+                         "reaproveitada sai marcada. Sem a flag, todo run valida do zero."))
     p.add_argument("--min-net-margin", type=float, default=0.0,
                    help="v2.0: filtra apenas oportunidades com margem liq REAL >= X apos validacao. Ex: 0.20 = so 20%% liq+")
     p.add_argument("--shipping-brl", type=float, default=0.0,
@@ -4456,7 +5052,7 @@ def main():
     cache = Cache(db_path=state_dir / "cache.db")
     if not args.dry_run:
         log.info("Nova coleta: renovando price_cache e fx_cache...")
-        cache.clear_prices()
+        cache.begin_run()
     ct = CardTraderClient(ct_jwt)
 
     # Pricing provider
@@ -4605,6 +5201,7 @@ def main():
         every_n=args.checkpoint_every,
         heartbeat_path=heartbeat_path,
         flush_every_listings=args.flush_every_listings,
+        resume_validation=args.resume_validation,
     )
     if checkpoint.enabled:
         # Header com args dict pra reprodutibilidade no recovery.
@@ -4622,8 +5219,10 @@ def main():
         # Flush + close mesmo em exception. fsync já roda per-write.
         pass
     dt = time.time() - t0
+    interrupted = bool(getattr(scanner, "interrupted", False))
     if checkpoint.enabled:
-        checkpoint.write_scan_complete(total_opps=len(opps), total_elapsed_s=dt)
+        if not interrupted:   # run interrompido NÃO é um run completo
+            checkpoint.write_scan_complete(total_opps=len(opps), total_elapsed_s=dt)
         checkpoint.close()
     # v2.29 (revisão): `opps` aqui ainda inclui os near-miss persistidos (v2.22,
     # keep_all_priced) — contar só o que está ≥ threshold, senão o log diz
@@ -4648,36 +5247,29 @@ def main():
     near_misses = [o for o in opps if o.below_threshold] if scanner.keep_all_priced else []
     opps = [o for o in opps if not o.below_threshold] if scanner.keep_all_priced else opps
 
-    # v2.0 — validação per-blueprint dos top N (só sobre as OPORTUNIDADES)
-    if args.validate_top > 0 and opps:
+    # v2.0 — validação per-blueprint (Lote 3: de TODAS as oportunidades por
+    # padrão; --validate-top N limita; 0 desliga). Só sobre as OPORTUNIDADES.
+    if args.validate_top != 0 and opps and not interrupted:
         t1 = time.time()
-        scanner.validate_per_blueprint(opps, top_n=args.validate_top)
-        log.info(f"Validação per-blueprint completa em {time.time()-t1:.1f}s")
+        try:
+            scanner.validate_per_blueprint(opps, top_n=args.validate_top, checkpoint=checkpoint)
+            log.info(f"Validação per-blueprint completa em {time.time()-t1:.1f}s")
+        except KeyboardInterrupt:
+            interrupted = True
+            log.error("Interrompido durante a validação — linhas ainda não validadas "
+                      "ficam NOT_VALIDATED; XLSX parcial será escrito.")
 
-        # M1 fix (2026-05-11): sempre filtra status inválidos (STALE, API_ERROR,
-        # PRICE_CHANGED) quando há validação, independente do min_net_margin.
-        # Antes só rodava quando min_net_margin > 0, deixando lixo no XLSX.
-        before_status = len(opps)
-        opps = [
-            o for o in opps
-            if o.validation_status in ("VALIDATED_REAL", "VALIDATED_MARKUP")
-        ]
-        dropped = before_status - len(opps)
-        if dropped > 0:
-            log.info(f"Filtro de status (STALE/API_ERROR/PRICE_CHANGED): {before_status} → {len(opps)} oportunidades")
-
-        # Filtro adicional por margem líq REAL (só se min_net_margin > 0)
-        if args.min_net_margin > 0:
-            before = len(opps)
-            opps = [
-                o for o in opps
-                if (o.real_net_margin_pct or 0) >= args.min_net_margin
-            ]
-            log.info(f"Filtro --min-net-margin {args.min_net_margin:.0%}: {before} → {len(opps)} oportunidades")
+        # Linhas não validadas (erro de API, STALE...) ficam com o status real;
+        # só o corte --min-net-margin (explícito) remove, e é logado.
+        before = len(opps)
+        opps, cut = apply_validation_filters(opps, args.min_net_margin)
+        scanner.stats["opps_descartadas_min_net"] = len(cut)
 
         # M2 fix (2026-05-11): sempre re-ordena por margem líq REAL desc
         # quando houve validação, não só quando min_net_margin > 0.
         opps.sort(key=lambda o: o.real_net_margin_pct or -999, reverse=True)
+
+    checkpoint.close()  # reaberto por write_validation/write_unpriced após o scan
 
     # v2.22: re-anexa os near-misses precificados (ordenados por margem bruta
     # desc) DEPOIS das oportunidades. Assim o XLSX nunca volta vazio quando há
@@ -4696,7 +5288,8 @@ def main():
     # pra calcular .checkpoint.jsonl sidecar)
     export_xlsx(opps, scanner.stats, out_path,
                 usd_brl=scanner.usd_brl, eur_brl=scanner.eur_brl,
-                threshold=args.threshold, hub_fee_rate=args.hub_fee)
+                threshold=args.threshold, hub_fee_rate=args.hub_fee,
+                unpriced=getattr(scanner, "unpriced_rows", None))
 
     # Top 5 por margem líquida REAL se validado, senão líquida estimada
     def net_key(o: Opportunity) -> float:
@@ -4730,11 +5323,13 @@ def main():
             print("      → revisar log WARNING acima (schema drift / SSL / endpoint down?)")
     if scanner.stats.get("expansions_mass_pricing_abort", 0) > 0:
         print(f"  💥 Sets abortados (mass pricing fail): {scanner.stats['expansions_mass_pricing_abort']}")
+    for _line in scanner.run_summary_lines():
+        print(f"  {_line}")
     print(f"  Planilha                : {out_path}")
     print("═" * 60)
 
     if opps_by_net:
-        validated_label = " (validadas v2.0)" if args.validate_top > 0 else ""
+        validated_label = " (validadas v2.0)" if args.validate_top != 0 else ""
         print(f"\n  TOP 5 OPORTUNIDADES{validated_label}:\n")
         for i, o in enumerate(opps_by_net[:5], 1):
             l = o.listing
@@ -4754,6 +5349,11 @@ def main():
                 print(f"     Margem: {o.margin_pct:.1%} bruta | {o.net_margin_pct:.1%} líquida{freight_suffix}  [não validado]")
             print(f"     Seller: {l.seller_username} ({l.seller_user_type})")
             print(f"     Link: {l.cardtrader_url}\n")
+
+    if interrupted:
+        log.error("⛔ Run INTERROMPIDO (Ctrl-C): planilha e resumo são PARCIAIS — "
+                  "sets não concluídos estão listados acima ('tentar de novo').")
+        sys.exit(130)
 
 
 if __name__ == "__main__":

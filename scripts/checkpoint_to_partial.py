@@ -90,6 +90,8 @@ def parse_checkpoint(path: Path):
     last_progress = None
     bad_lines = 0
     seen_pids: dict = {}
+    validations: dict = {}           # Lote 3c: registros de validação per-blueprint
+    validation_complete = False
 
     with open(path, "r", encoding="utf-8") as f:
         for raw in f:
@@ -132,6 +134,7 @@ def parse_checkpoint(path: Path):
                     "seller": lst.get("seller_username") or "",
                     "hub": bool(lst.get("seller_can_sell_via_hub")),
                     "url": lst.get("cardtrader_url") or "",
+                    "_key": f"{pid}:{lst.get('seller_username')}",
                     # Link de REFERÊNCIA (TCGplayer) — obrigatório no contrato de
                     # entrega da frota (toda linha = [oferta] · [TCG]). Vem do
                     # campo `tcg_url` da Opportunity (card.tcgplayer.url do raw).
@@ -146,6 +149,10 @@ def parse_checkpoint(path: Path):
                         seen_pids[pid] = row
                     else:
                         deals.append(row)
+            elif typ == "validation":
+                validations[f"{o.get('product_id')}:{o.get('seller')}"] = o
+            elif typ == "validation_complete":
+                validation_complete = True
             elif typ == "set_complete":
                 sets_complete += 1
             elif typ == "scan_header":
@@ -156,6 +163,17 @@ def parse_checkpoint(path: Path):
                 last_progress = o
 
     deals.extend(seen_pids.values())
+    # Lote 3c: aplica o resultado da validação gravado no checkpoint (a linha
+    # deixa de mostrar NOT_VALIDATED quando já foi validada).
+    for r in deals:
+        v = validations.get(r.get("_key"))
+        if v:
+            r["validation"] = v.get("validation_status") or r["validation"]
+            if v.get("real_net_margin_pct") is not None:
+                r["net_pct"] = _num(v["real_net_margin_pct"])
+            if v.get("real_lucro_brl") is not None:
+                r["lucro_brl"] = _num(v["real_lucro_brl"])
+            r["markup_tier"] = v.get("markup_tier") or r["markup_tier"]
     # Ordena por margem BRUTA (critério único do operador), desempate por líquida.
     deals.sort(key=lambda r: (r["margin_pct"], r["net_pct"]), reverse=True)
 
@@ -165,7 +183,8 @@ def parse_checkpoint(path: Path):
         "sets_complete": sets_complete,
         "deals": len(deals),
         "bad_lines": bad_lines,
-        "finished": scan_complete is not None,
+        # validação em curso (começou e não concluiu) = run NÃO terminou
+        "finished": scan_complete is not None and (not validations or validation_complete),
         "last_progress": last_progress,
         "header_stamp": header.get("stamp") if header else None,
     }
