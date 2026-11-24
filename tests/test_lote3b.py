@@ -168,7 +168,7 @@ def _opp(bp_id, ct=100.0):
 
 def _live(bp_id):
     return [{"user": {"username": f"s{bp_id}"}, "price_cents": 10000,
-             "price_currency": "BRL",
+             "price_currency": "BRL", "graded": False,
              "properties_hash": {"condition": "Near Mint", "pokemon_reverse": False}}]
 
 

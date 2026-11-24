@@ -40,6 +40,7 @@ def _listing(seller, price_cents, condition, reverse):
         "user": {"username": seller},
         "price_cents": price_cents,
         "price_currency": "BRL",
+        "graded": False,
         "properties_hash": {
             "condition": condition,
             "pokemon_reverse": reverse,

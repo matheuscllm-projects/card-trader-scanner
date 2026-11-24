@@ -331,7 +331,8 @@ def _pb(cents, fe=None, cond="Near Mint"):
     ph = {"condition": cond, "pokemon_reverse": False}
     if fe is not None:
         ph["first_edition"] = fe
-    return {"user": {"username": "S"}, "price_cents": cents, "price_currency": "BRL", "properties_hash": ph}
+    # formato REAL da API (price:{cents,currency}, graded presente) — ver tests/fixtures/ct/
+    return {"user": {"username": "S"}, "price": {"cents": cents, "currency": "BRL"}, "graded": False, "properties_hash": ph}
 
 
 def _validator():

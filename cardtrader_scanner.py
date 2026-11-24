@@ -3477,6 +3477,9 @@ class Scanner:
             "tcg_price_found": 0,
             "opportunities_found": 0,
             "skipped_exotic_currency": 0,  # M4 fix: contador de listings em moedas exóticas (GBP/JPY/etc)
+            "skipped_invalid_price": 0,       # B1n: sem preço CT válido (ausente/0/não finito)
+            "skipped_unexpected_payload": 0,  # B1n: campo obrigatório ausente (graded/condition/língua/vendedor)
+            "listings_no_blueprint": 0, "listings_rejected_by_filters": 0, "listings_deduped": 0,
             "expansions_skipped_by_list": 0,  # v2.4: sets pulados via skip-list
             "expansions_timed_out": 0,        # v2.4: sets que estouraram per_set_timeout
             "pricing_failures": 0,            # v2.9 (Codex H5): erros desconhecidos no pricing
@@ -3500,6 +3503,7 @@ class Scanner:
         """
         bp = bp_index.get(raw.get("blueprint_id"))
         if not bp:
+            self._count("listings_no_blueprint")
             return None
 
         # Preço: CT retorna centavos + currency. Em 2026-04-29 descobrimos
@@ -3507,9 +3511,40 @@ class Scanner:
         # pela API CT (independente do país do seller). Antes tudo vinha em EUR.
         # Estratégia: BRL é a moeda interna do scanner, com fallback EUR/USD
         # via Frankfurter pra sellers que ainda enviam moeda original.
-        price = raw.get("price", {})
-        cents = price.get("cents", 0)
-        currency = (price.get("currency") or "BRL").upper()
+        # B1n: preço ausente/0/negativo/não finito NUNCA segue como 0 (mesma família do bug do B1m):
+        # a oferta é descartada e contada em "sem preço CT válido".
+        price = raw.get("price")
+        cents = price.get("cents") if isinstance(price, dict) else None
+        if isinstance(cents, bool) or not isinstance(cents, (int, float)) or not math.isfinite(cents) or cents <= 0:
+            self._count("skipped_invalid_price")
+            return None
+        currency = ((price.get("currency") or "BRL") if isinstance(price, dict) else "BRL").upper()
+        # B1n: campos OBRIGATÓRIOS (em 6237 listings reais uf/skg/wiz todos presentes): ausente = formato inesperado da
+        # API -> a oferta NÃO segue com default silencioso; entra no contador de payload inesperado (e no canário do set).
+        props = raw.get("properties_hash") or raw.get("properties") or {}
+        user = raw.get("user") or {}
+        missing = []
+        if "graded" not in raw:
+            missing.append("graded")
+        if "condition" not in props:
+            missing.append("condition")
+        if "pokemon_language" not in props:
+            missing.append("pokemon_language")
+        if "username" not in user:
+            missing.append("user.username")
+        if missing:
+            pm = self.__dict__.setdefault("_pl_missing", {})
+            for k in missing:
+                pm[k] = pm.get(k, 0) + 1
+            self._count("skipped_unexpected_payload")
+            return None
+        # B1n: campos OPCIONAIS com default seguro DOCUMENTADO (e contado): pokemon_reverse ausente = não-reverse
+        # (1/6237 em dado real), user_type ausente = "private", can_sell_via_hub ausente = False (só informativos).
+        pdft = self.__dict__.setdefault("_pl_defaults", {})
+        for k, present in (("pokemon_reverse", "pokemon_reverse" in props), ("user.can_sell_via_hub", "can_sell_via_hub" in user),
+                           ("user.user_type", "user_type" in user)):
+            if not present:
+                pdft[k] = pdft.get(k, 0) + 1
         if currency == "BRL":
             price_brl_val = cents / 100.0
         elif currency == "EUR":
@@ -3520,15 +3555,13 @@ class Scanner:
             # GBP, JPY etc — raro, ignorado até termos demanda.
             # M4 fix (2026-05-11): log + stat counter pra não perder cobertura
             # silenciosa caso CT habilite GBP/JPY nativo no futuro.
-            log.debug(
-                f"moeda exótica ignorada: {currency} no listing "
-                f"{raw.get('id')} (bp={raw.get('blueprint_id')})"
-            )
-            self.stats["skipped_exotic_currency"] += 1
+            warned = self.__dict__.setdefault("_warned_currency", set())
+            if currency not in warned:
+                warned.add(currency)
+                log.warning(f"moeda não suportada: {currency} no listing {raw.get('id')} (bp={raw.get('blueprint_id')}) — "
+                            f"ofertas nessa moeda são descartadas e contadas em 'moeda não suportada'")
+            self._count("skipped_exotic_currency")
             return None
-
-        props = raw.get("properties_hash") or raw.get("properties") or {}
-        user = raw.get("user", {})
 
         # Set code/name: blueprint só traz `expansion_id` numérico (sem dict
         # nested), então a fonte confiável é o próprio listing, que vem com
@@ -3570,7 +3603,7 @@ class Scanner:
             # reverseHolofoil (inflado). Agora reverse-holo → foil=True.
             foil=(to_bool(props.get("mtg_foil", False)) or to_bool(props.get("foil", False))
                   or to_bool(props.get("pokemon_reverse", False))),
-            graded=raw.get("graded", False),
+            graded=to_bool(raw["graded"]),
             seller_username=user.get("username", ""),
             seller_can_sell_via_hub=user.get("can_sell_via_hub", False),
             seller_user_type=user.get("user_type", "private"),
@@ -3589,6 +3622,60 @@ class Scanner:
                 or ""
             ).strip(),
         )
+
+    def _count(self, key: str, n: int = 1) -> None:
+        self.stats[key] = self.stats.get(key, 0) + n
+
+    def _ingest_raw_listings(self, raw_listings, bp_index):
+        """Parse + filtros + dedup, contando CADA destino (a soma fecha com o total baixado): sem blueprint, sem preço CT
+        válido, payload inesperado, moeda não suportada, reprovadas nos filtros, duplicadas e as que seguem."""
+        for k in ("listings_no_blueprint", "listings_rejected_by_filters", "listings_deduped",
+                  "skipped_invalid_price", "skipped_unexpected_payload", "skipped_exotic_currency"):
+            self.stats.setdefault(k, 0)
+        best_by_uid: dict[str, Listing] = {}
+        langs_seen: dict[str, int] = {}
+        for raw in raw_listings:
+            l = self._parse_listing(raw, bp_index)
+            if not l:
+                continue
+            langs_seen[l.language or "(vazio)"] = langs_seen.get(l.language or "(vazio)", 0) + 1
+            if not self._passes_filters(l):
+                self._count("listings_rejected_by_filters")
+                continue
+            existing = best_by_uid.get(l.uid)
+            if existing is not None:
+                self._count("listings_deduped")
+            if not existing or l.price_brl < existing.price_brl:
+                best_by_uid[l.uid] = l
+        return best_by_uid, langs_seen
+
+    PAYLOAD_CANARY_FRACTION = 0.10      # fração de listings do set sem uma chave obrigatória que dispara o canário
+    PAYLOAD_CANARY_MIN_SAMPLE = 20
+
+    def _check_payload_canary(self, exp_code: str, total: int) -> bool:
+        """B1n: se uma fração relevante dos listings do set veio SEM uma chave obrigatória, o formato da API mudou:
+        log.error + desfecho operational_failure (nunca no_coverage; tentar de novo / corrigir o scanner)."""
+        miss = self.__dict__.get("_pl_missing") or {}
+        if total < self.PAYLOAD_CANARY_MIN_SAMPLE:
+            return False
+        for key, n in sorted(miss.items(), key=lambda kv: -kv[1]):
+            if n / total >= self.PAYLOAD_CANARY_FRACTION:
+                log.error(f"  ⛔ {exp_code}: formato da API mudou: chave {key} ausente em {n}/{total} listings — "
+                          f"set NÃO avaliado (falha operacional, não 'sem cobertura')")
+                self._set_outcome("operational_failure", f"api_format_changed_{key}")
+                return True
+        return False
+
+    def funnel_summary_lines(self) -> list[str]:
+        st = self.stats
+        return [
+            f"Funil de ofertas: baixadas {st.get('listings_fetched', 0)} = {st.get('listings_after_filters', 0)} após filtros"
+            f" + {st.get('listings_deduped', 0)} duplicadas + {st.get('listings_rejected_by_filters', 0)} reprovadas nos filtros"
+            f" + {st.get('listings_no_blueprint', 0)} sem blueprint + {st.get('skipped_invalid_price', 0)} sem preço CT válido"
+            f" + {st.get('skipped_unexpected_payload', 0)} payload inesperado + {st.get('skipped_exotic_currency', 0)} moeda não suportada",
+            f"sem preço CT válido: {st.get('skipped_invalid_price', 0)} | payload inesperado: {st.get('skipped_unexpected_payload', 0)}"
+            f" | moeda não suportada: {st.get('skipped_exotic_currency', 0)}",
+        ]
 
     def _passes_filters(self, l: Listing) -> bool:
         if l.condition != CONDITION_FILTER:
@@ -4064,18 +4151,10 @@ class Scanner:
         # Comparação é em BRL (não em cents) porque listings podem vir em
         # moedas diferentes — comparar cents direto seria errado (1 cent BRL
         # ≠ 1 cent EUR).
-        best_by_uid: dict[str, Listing] = {}
-        langs_seen: dict[str, int] = {}
-        for raw in raw_listings:
-            l = self._parse_listing(raw, bp_index)
-            if not l:
-                continue
-            langs_seen[l.language or "(vazio)"] = langs_seen.get(l.language or "(vazio)", 0) + 1
-            if not self._passes_filters(l):
-                continue
-            existing = best_by_uid.get(l.uid)
-            if not existing or l.price_brl < existing.price_brl:
-                best_by_uid[l.uid] = l
+        self._pl_missing, self._pl_defaults = {}, {}
+        best_by_uid, langs_seen = self._ingest_raw_listings(raw_listings, bp_index)
+        if self._check_payload_canary(exp_code, total=len(raw_listings)):
+            return
 
         # v2.29: diagnóstico do "verde mas vazio" por idioma — o servidor
         # devolveu ofertas mas NENHUMA bateu o idioma configurado (apelido não
@@ -4991,6 +5070,9 @@ class Scanner:
             is_rev = (to_bool(p.get("pokemon_reverse", False))
                       or to_bool(p.get("mtg_foil", False))
                       or to_bool(p.get("foil", False)))
+            g = listing_dict.get("graded")
+            if g is None or to_bool(g):      # B1n: graduado (ou sem a chave `graded`) NUNCA valida uma oferta raw
+                return False
             return cond == o.listing.condition and is_rev == bool(o.listing.foil)
 
         def _props(listing_dict) -> dict:
@@ -5038,32 +5120,15 @@ class Scanner:
         elif live_currency == "USD":
             live_brl = (live_cents / 100.0) * self.usd_brl
         else:
-            o.validation_status = "API_ERROR"
+            o.validation_status = "MOEDA_NAO_SUPORTADA"
+            o.validation_reason = f"moeda não suportada no listing per-blueprint: {live_currency}"
             return
 
         o.live_price_brl = live_brl
         markup = (live_brl - o.ct_price_brl) / o.ct_price_brl if o.ct_price_brl > 0 else 0.0
         o.markup_pct = markup
         # Classificação tier (com base no padrão observado 2026-04-29 e refinado 2026-05-11)
-        if markup < 0.02:
-            o.markup_tier = "Real (sem markup)"
-            o.validation_status = "VALIDATED_REAL"
-        elif markup < 0.12:
-            o.markup_tier = "Hub (+6%)"
-            o.validation_status = "VALIDATED_MARKUP"
-        elif markup < 0.30:
-            o.markup_tier = "non-VAT (+20%)"
-            o.validation_status = "VALIDATED_MARKUP"
-        elif markup < 0.45:
-            # 2026-05-11: tiers 30-45% (TheDragonsVault, A2Z TCG, Fun Gs)
-            # parecem legítimos — provavelmente non-Hub VAT-exempt ou
-            # categoria comissionada alta. Validados, não erro de preço.
-            o.markup_tier = f"Alto markup ({markup*100:+.0f}%)"
-            o.validation_status = "VALIDATED_MARKUP"
-        else:
-            # markup ≥45% — provavelmente preço mudou entre scan e validate
-            o.markup_tier = f"Anômalo ({markup*100:+.0f}%)"
-            o.validation_status = "PRICE_CHANGED"
+        o.markup_tier, o.validation_status = classify_markup(markup)
 
         # Recalc margens com preço LIVE (per-blueprint, preço de checkout).
         # v2.12 (2026-06-06): custo real = live_brl × (1 + hub_fee_rate). Com
@@ -5244,6 +5309,21 @@ def print_top_opportunities(opps_by_net, validated: bool = True) -> None:
 
 VALIDATION_RESUME_MAX_AGE_H = 3   # validação gravada há mais que isso não é reaproveitada
 VALIDATION_PROGRESS_EVERY = 25    # blueprints entre linhas de progresso
+
+
+def classify_markup(markup: float):
+    """(rótulo, status) pela diferença LIVE × scan. B1n: o rótulo só DESCREVE o intervalo (neutro); os nomes antigos
+    ("Hub (+6%)", "non-VAT (+20%)") afirmavam uma causa que os dados não sustentam — em 53 ofertas cotadas em USD a
+    diferença era um fator constante (câmbio da CT x câmbio do scanner), não imposto."""
+    if markup < 0.02:
+        return "LIVE ≈ scan (< +2%)", "VALIDATED_REAL"
+    if markup < 0.12:
+        return "LIVE +2% a +12% vs scan", "VALIDATED_MARKUP"
+    if markup < 0.30:
+        return "LIVE +12% a +30% vs scan", "VALIDATED_MARKUP"
+    if markup < 0.45:
+        return "LIVE +30% a +45% vs scan", "VALIDATED_MARKUP"
+    return f"LIVE {markup * 100:+.0f}% vs scan (≥ +45%)", "PRICE_CHANGED"
 
 
 def listing_live_price(listing: dict):
@@ -6212,7 +6292,7 @@ def main():
             print("      → revisar log WARNING acima (schema drift / SSL / endpoint down?)")
     if scanner.stats.get("expansions_mass_pricing_abort", 0) > 0:
         print(f"  💥 Sets abortados (mass pricing fail): {scanner.stats['expansions_mass_pricing_abort']}")
-    for _line in scanner.run_summary_lines():
+    for _line in getattr(scanner, "funnel_summary_lines", lambda: [])() + scanner.run_summary_lines():
         print(f"  {_line}")
     print(f"  Planilha                : {out_path}")
     print("═" * 60)
@@ -6220,8 +6300,8 @@ def main():
     if opps_by_net:
         try:
             print_top_opportunities(opps_by_net, validated=args.validate_top != 0)
-        except Exception as e:  # noqa: BLE001 — o resumo é só exibição: nunca derruba o scan (B1m)
-            log.warning(f"bloco TOP 5 não pôde ser impresso ({type(e).__name__}: {e}); o XLSX está completo")
+        except Exception:  # noqa: BLE001 — o resumo é só exibição: nunca derruba o scan (B1m), mas NÃO fica mudo (B1n)
+            log.exception("bloco TOP 5 não pôde ser impresso; o XLSX está completo")
 
     if args.validate_top != 0 and not interrupted:
         _vcode = validation_exit_code(opps)

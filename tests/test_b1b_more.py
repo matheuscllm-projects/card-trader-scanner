@@ -124,8 +124,8 @@ def test_first_edition_reading_is_robust_to_strings(raw, expected):
     s = sc.Scanner.__new__(sc.Scanner)
     s.usd_brl, s.eur_brl, s.stats = 5.0, 5.9, {"skipped_exotic_currency": 0}
     rawo = {"id": 1, "blueprint_id": 1, "quantity": 1, "price": {"cents": 100, "currency": "BRL"},
-            "user": {"username": "u"}, "expansion": {"code": "n1"},
-            "properties_hash": {"condition": "Near Mint", "first_edition": raw, "pokemon_reverse": raw}}
+            "user": {"username": "u"}, "expansion": {"code": "n1"}, "graded": False,
+            "properties_hash": {"condition": "Near Mint", "pokemon_language": "en", "first_edition": raw, "pokemon_reverse": raw}}
     l = s._parse_listing(rawo, {1: {"name": "X", "fixed_properties": {}}})
     assert l.first_edition is expected and l.foil is expected
 
