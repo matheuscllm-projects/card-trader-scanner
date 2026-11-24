@@ -53,3 +53,15 @@ O integrado deve chamar as fontes nesta execução, sem carregar arquivos antigo
 - Linhas das abas `Sem preço` / `Sem Ref Compatível` saem num bloco à parte, sem margem.
 - Consultas ao PriceCharting: cache só do run, créditos Firecrawl informados no rodapé
   (teto 100 por scan; padrão 0).
+
+## B1b — edição, fonte e data da referência; entrega completa
+
+- A tabela ganha `Edição` e `Acabamento` (depois de `Carta`) e `Fonte ref.` e `Data ref.` (antes de
+  `Flag`). `—` = scanner antigo, não informado. Os dois links por linha seguem intactos.
+- `Data ref.` = data do DADO (`dado de …`: dump diário do tcgcsv, `updatedAt` do TCGplayer);
+  `buscado em …` só quando a fonte não expõe a data.
+- Canônico sem `--top-md`: entrega TODAS as linhas. Com limite, o cabeçalho diz "mostrando N de M" e
+  o rodapé diz quantas ficaram fora e em qual aba (`Deals`) estão.
+- Rodapé "Origem dos números": ofertas buscadas → após filtros, texto dos filtros e descartes de
+  `--chase-only` / `--opportunities-only`.
+- `Sem Ref Compatível` com tcgcsv como fallback: uma linha só, com os dois motivos (um por fonte).
