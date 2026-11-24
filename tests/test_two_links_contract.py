@@ -76,3 +76,19 @@ def test_row_with_both_links_has_no_missing_flag():
 
 def test_chase_tier_patterns_parity_scanner_vs_postprocess():
     assert sc.CHASE_TIER_PATTERNS == pp.CHASE_TIER_PATTERNS
+
+
+@pytest.mark.parametrize("bad", ["http", "httpfoo", "http:", "https://", "http://  "])
+def test_url_without_host_is_invalid_in_cell_and_flag(bad):
+    assert "TCG: sem link" in pp._md_links_cell(CT, bad)
+    df, cfg = _df(CT, bad)
+    line = _row_line(pp.build_delivery_markdown(df, cfg, fx_usd_brl=5.0))
+    assert "sem link TCG" in line
+
+
+def test_uppercase_scheme_is_valid_in_cell_and_flag():
+    url = "HTTPS://exemplo.com/x"
+    assert f"[TCG]({url})" in pp._md_links_cell(CT, url)
+    df, cfg = _df(CT, url)
+    line = _row_line(pp.build_delivery_markdown(df, cfg, fx_usd_brl=5.0))
+    assert "sem link" not in line
