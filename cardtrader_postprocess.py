@@ -533,7 +533,7 @@ def _recompute_margin_with_fee(df: pd.DataFrame, costs: Costs | None = None,
         if not eco.tem_margem:
             continue
         old = cols["net_margin"][pos]
-        drift = abs(old - eco.margem_venda) if pd.notna(old) else 0.0
+        drift = abs(old - eco.margem_venda) / max(1.0, abs(eco.margem_venda)) if pd.notna(old) else 0.0  # relativo: margens negativas gigantes vem arredondadas do scanner
         if drift > drift_threshold_pp:
             n_drift += 1
             max_drift = max(max_drift, drift)

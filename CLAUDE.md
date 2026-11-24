@@ -85,45 +85,53 @@ lucro** (`--threshold`, lê-se "thréshould" = limiar). Aqui ela é escrita como
 
 ---
 
-## A conta do lucro (margem BRUTA — você soma as taxas por fora)
+## A conta do lucro e a decisão (P1, 2026-11-24 — decisões do dono)
 
-**Mudança de 2026-06-06 (v2.12):** o programa mostra só a **margem bruta** — o
-desconto puro, sem descontar nenhuma taxa. A conta é a mais simples possível:
+**Uma só conta**, em `ct_economics.compute` (o postprocess não tem mais fórmula própria):
 
 ```
-margem = (preço de referência TCG − preço no site) ÷ preço TCG
+margem sobre a VENDA = (referência − compra) ÷ referência   ← é o CORTE (30%) e a coluna "Margem %"
+ROI sobre aquisição  = (referência − compra) ÷ compra       ← só informativo (XLSX); nunca vira o corte
 ```
 
-> **O que isso quer dizer na prática:** o programa pega o preço que aparece na
-> ficha da carta no CardTrader e compara com o preço de referência dos EUA
-> (TCG Player). O número que aparece na planilha é esse desconto cru. **Você
-> (Matheus) é quem soma o Hub fee, o frete, a taxa do cartão e o IOF por fora**,
-> manualmente, do seu jeito, pra decidir se vale a pena.
+Exemplo: compra 75, referência 100 → margem 25% (**não** passa em 30%), ROI 33,3%.
 
-> **Por que mudamos:** antes o programa já tirava 6% sozinho (de "Hub fee").
-> Agora ele não mexe em nada — só te dá o número limpo. Fica mais fácil você
-> conferir a margem da planilha contra o que vê no site, sem ter que "desfazer"
-> a taxa de cabeça.
+- **Custos:** Hub 6% e frete de R$ 0,50 **por carta** (sem desconto por quantidade do
+  mesmo vendedor). IOF, spread cambial, taxa do cartão, imposto de importação e taxas de
+  venda são **configuráveis por flag** (`--iof`, `--spread-cambio`, `--card-fee`,
+  `--import-tax`, `--sell-fee`, `--sell-shipping-brl`) e valem "não informado" até alguém
+  informar. Enquanto houver custo não informado, a margem líquida do XLSX sai marcada
+  **PARCIAL** (com a lista do que falta) — nunca como definitiva. No chat não aparece
+  margem líquida.
+- **Hub nunca em dobro:** o preço de checkout (`LIVE R$ (real)`) já embute o Hub; o preço
+  cru do scan (`Scan R$ (raw)`) não. Cada linha carrega `compra_inclui_hub` (decidido pela
+  coluna que a linha usa) e só o preço cru recebe os 6%.
+- **Chase é só informativo** (vintage e moderno): coluna do XLSX, nunca em ramo de decisão.
+  Vem da coluna `Chase Tier` do scanner; sem ela, `ct_chase.classify_chase_tier`.
+- **COMPRA exige, junto:** margem sobre a venda ≥ corte (`--min-net-margin`, **padrão 0.30**;
+  o cabeçalho da entrega imprime o corte em uso) · lucro ≥ R$ 50 · preço validado no
+  checkout · referência de variante/edição compatível (coluna `Ref Compatível` = Sim; sem
+  ela → REVISAR) · **liquidez verificada** no PriceCharting: ≥ `--min-sales-90d` (padrão 5)
+  vendas em 90 dias **e** ≥ `--min-sales-30d` (padrão 1) em 30 dias, só cartas não
+  graduadas e unitárias, da página da **mesma edição**. Contagem truncada vale "pelo menos
+  N". Sem dado de liquidez (sem consulta, 403, sem página, edição não informada, oferta
+  reverse — o acabamento da página PC não é confirmável pelo módulo) → **REVISAR** com o
+  motivo "liquidez não verificada: <status>". Margem alta nunca dispensa a liquidez.
+- **Margem negativa** nunca entra na tabela do chat: vai para a aba **Auditoria** do XLSX e a
+  entrega diz em uma linha quantas foram. (Antes entravam por causa das regras de REVISAR
+  — sufixo alfa/set sem cobertura — que rodavam antes do teste de margem.)
+- **PriceCharting:** `--pc-refs N` = no máximo N consultas **únicas** (carta+set+edição+
+  acabamento; linhas repetidas = 1 consulta), das linhas de maior lucro primeiro. Edição vem
+  da coluna `Edição`; ausente (XLSX antigo) → não consulta, "edição não informada".
+  `--pc-firecrawl N` (padrão 0 = nunca gasta; máximo 100 por scan) paga o Firecrawl só
+  quando o PriceCharting bloqueia. A entrega informa consultas únicas × linhas atendidas ×
+  créditos. Cache só do run (pasta `pc_cache_<timestamp>` ao lado do XLSX).
+- **Abas opcionais do scanner** `Sem preço` / `Sem Ref Compatível`: viram bloco à parte na
+  entrega (sem margem, com motivo e os dois links; "TCG: sem link" quando faltar).
 
-> ⚠️ **Base do denominador (divergência conhecida com a frota):** a fórmula
-> genérica do bloco da frota divide pelo preço de **compra**; **este scanner
-> divide pelo preço de REVENDA (TCG)** — confirmado no código:
-> `margin = (tcg_brl - custo_brl) / tcg_brl` (`cardtrader_scanner.py`). É a
-> mesma divergência já reconhecida no scanner integrado (que recalcula tudo na
-> base compra ao unificar as fontes). **Não "corrija" a fórmula daqui** sem
-> decisão explícita do operador — a base revenda dá um número menor ou igual,
-> então nenhum deal aprovado aqui viraria reprovado na base da frota.
-
-> **Detalhe técnico (pode pular):** o primeiro rastreio usa um preço "cru"
-> (*per-expansion*, agregado por coleção); a conferência (`--validate-top`)
-> refaz com o preço **real de checkout** (*per-blueprint*, por carta exata).
-> **Sempre conferir** — sem isso, no passado **~76% dos "achados" eram falsos**.
-> ⚠️ O default de `--validate-top` é **0** (omitir = NENHUMA validação): sempre
-> passe o valor canônico `--validate-top 30`.
->
-> A opção `--hub-fee` continua existindo nos dois scripts e tem **default 0.0**
-> (margem bruta). Se um dia quiser reembutir os 6% antigos, passe `--hub-fee
-> 0.06` no scanner **e** no postprocess.
+> Os números de `margem` da planilha mudaram de nome: `Margem venda %` (era `Net %`) e
+> `Lucro bruto (R$)` (era `Lucro Líq`) — o conteúdo é o mesmo cálculo do scanner na base
+> venda, só que agora vem de um único módulo.
 
 ---
 
@@ -207,9 +215,8 @@ use exatamente os valores canônicos:
 
 - `--validate-top` default **0** = sem validação per-blueprint se omitido —
   crítico, dado os ~76% de falsos sem ela. Canônico = `30`.
-- `--min-net-margin`: default **0.0 no scanner** e **0.25 no postprocess** —
-  o comando canônico passa `0.20` explícito no scanner; no postprocess, quem
-  quiser o mesmo corte precisa passar explicitamente.
+- `--min-net-margin`: default **0.0 no scanner** e **0.30 no postprocess** (corte do
+  dono, margem sobre a venda) — o comando canônico passa `0.20` explícito no scanner.
 
 Opções úteis:
 
@@ -255,11 +262,10 @@ Opções úteis:
   `--checkpoint-every`, `--flush-every-listings`, `--max-consecutive-misses`,
   `--per-set-timeout`, `--state-dir`, `--allow-concurrent`,
   `--no-tcgcsv-fallback`; no postprocess: `--revisar-min-net`,
-  `--revisar-modest-min`, `--min-lucro`, `--top-md`, `--doubleholo`,
-  `--no-pid-resolve`, `--pc-refs N` (v2.27: coluna `Ref PC US$`/`Margem PC %` =
-  mediana das vendas REAIS do PriceCharting nas N linhas de maior margem da
-  entrega + link `[PC]` + flag `PC diverge`; sinal-only, recomendado em scans
-  vintage/back-catalog onde a ref TCG infla)) — `--help` de cada script lista
+  `--min-lucro`, `--min-sales-90d`, `--min-sales-30d`, `--iof`, `--shipping-brl`, `--top-md`, `--doubleholo`,
+  `--no-pid-resolve`, `--pc-refs N` (P1: liquidez `Vendas 30d/90d` + `Ref PC US$`
+  (mediana ungraded, sem lotes) + link `[PC]` + flag `PC diverge`, por consulta única, linhas
+  de maior lucro primeiro; é o que libera COMPRA)) — `--help` de cada script lista
   tudo.
 
 > ⚠️ **Gotcha do fallback tcgcsv (registrado 2026-07-06; skill alinhada em
@@ -367,7 +373,7 @@ ele imprime no terminal E grava um arquivo `.md` ao lado da planilha:
 A tabela tem as colunas:
 
 ```
-| # | Margem % | CT US$ | TCG US$ | Dif | Carta | Set | Raridade | Cond | Qtd | Flag | Links |
+| # | Margem % | CT US$ | TCG US$ | Dif | Carta | Set | Raridade | Cond | Qtd | Vendas 30d | Vendas 90d | Flag | Links |
 ```
 
 O que cada coluna quer dizer:
@@ -375,7 +381,8 @@ O que cada coluna quer dizer:
 | Coluna | O que é |
 |---|---|
 | **#** | posição no ranking (1 = maior margem) |
-| **Margem %** | o desconto bruto (preço EUA − preço Europa) ÷ preço EUA |
+| **Margem %** | margem sobre a VENDA: (referência − compra) ÷ referência (`ct_economics`); o corte é 30% |
+| **Vendas 30d / 90d** | vendas ungraded da página PriceCharting da mesma edição; `≥N` = piso (página truncada); `—` = não verificada |
 | **CT US$** | preço no CardTrader, **em dólar** (convertido do real pela cotação do dia, que o programa lê da planilha) |
 | **TCG US$** | preço de referência dos EUA (TCG Player), em dólar |
 | **Dif** | a diferença em dólar (TCG US$ − CT US$) — quanto "sobra" antes das taxas |
@@ -383,7 +390,7 @@ O que cada coluna quer dizer:
 | **Set** | a coleção (código do CardTrader) |
 | **Raridade** / **Cond** | raridade oficial e condição (sempre Near Mint) |
 | **Qtd** | quantas unidades o vendedor tem (você importa em lote) |
-| **Flag** | aviso de cautela por linha: **"validar manual"** quando a carta caiu na zona REVISAR (margem borderline OU suspeita de inflada — `TG`, sufixo de promo/league, set sem cobertura confiável, markup anômalo). Vazio = COMPRA limpa. **É só um aviso**, não muda a margem |
+| **Flag** | **"validar manual: <motivo>"** quando a linha é REVISAR (margem borderline, suspeita de inflada — `TG`, sufixo de promo/league, set sem cobertura, markup anômalo —, ref não certificada ou **liquidez não verificada/baixa**). Vazio = COMPRA. Margem negativa nunca aparece (aba Auditoria) |
 | **Links** | **dois links pra clicar:** `[oferta]` abre a página da carta no CardTrader · `[TCG]` abre a página do TCG Player **pra você conferir o preço à mão** |
 
 > **Por que a coluna Flag:** ela traz pro chat a mesma classificação que a

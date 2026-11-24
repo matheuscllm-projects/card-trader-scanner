@@ -38,3 +38,18 @@ entre execuções; para MYP não retomar checkpoints de solicitações anteriore
 COMC/eBay devem usar diretório de cache novo por coleta. Selados devem reconstruir
 as referências de classificação e coletar novamente as ofertas antes do relatório.
 O integrado deve chamar as fontes nesta execução, sem carregar arquivos antigos.
+
+## Regras de decisão e colunas do CardTrader (P1, 2026-11-24, decisões do dono)
+
+- Margem do corte = sobre a VENDA `(ref − compra)/ref` (padrão 30%, impresso no cabeçalho);
+  ROI sobre aquisição só informativo. Hub 6% + frete R$ 0,50/carta só na líquida (XLSX),
+  sempre rotulada PARCIAL enquanto houver custo não informado; nada de líquida no chat.
+- Chase é informativo, nunca decide. COMPRA exige liquidez verificada no PriceCharting
+  (≥5 vendas/90d e ≥1/30d, configuráveis); sem dado → REVISAR com o motivo.
+- A tabela ganha `Vendas 30d` e `Vendas 90d` (com `≥` quando é piso) antes de `Flag`; todas as
+  colunas anteriores e os dois links por linha (oferta + referência) seguem em todos os blocos.
+- Margem negativa fica fora da tabela (aba Auditoria do XLSX); o rodapé diz quantas, e fecha a
+  conta: entrada = COMPRA + REVISAR + abaixo do corte + margem negativa + blocos extras.
+- Linhas das abas `Sem preço` / `Sem Ref Compatível` saem num bloco à parte, sem margem.
+- Consultas ao PriceCharting: cache só do run, créditos Firecrawl informados no rodapé
+  (teto 100 por scan; padrão 0).
