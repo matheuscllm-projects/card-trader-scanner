@@ -2053,12 +2053,10 @@ class PokemonTcgIoProvider(PricingProvider):
             self.last_set_release_date = cached.get("set_release_date")
             self.last_normal_market = cached.get("normal_market")
             self.last_ref_data_at = cached.get("ref_data_at")
-            hd = ct_variants.holo_detection(rarity, self.last_ptcg_rarity,
-                                            set_released=self.last_set_release_date,
-                                            set_code=set_code)
-            offer = ct_variants.offer_variant(first_edition, foil, hd.is_holo)
             prices = cached.get("prices") or {}
-            m = ct_variants.match_reference_variant(prices, *offer, era_missing=hd.era_missing)
+            m, hd, offer = ct_variants.match_offer(
+                prices, first_edition, foil, rarity, ref_rarity=self.last_ptcg_rarity,
+                set_released=self.last_set_release_date, set_code=set_code)
             if m.status == ct_variants.OK and m.key == self.last_variant_used:
                 self._set_ref(m, prices, offer, hd.era_missing, rarity)
                 return cached["market_usd"]
@@ -2091,11 +2089,9 @@ class PokemonTcgIoProvider(PricingProvider):
         # v2.24: âncora `normal.market` pro guard reverse-outlier.
         self.last_normal_market = (tcg.get("normal") or {}).get("market")
 
-        hd = ct_variants.holo_detection(rarity, card.get("rarity"),
-                                        set_released=self.last_set_release_date,
-                                        set_code=set_code)
-        offer = ct_variants.offer_variant(first_edition, foil, hd.is_holo)
-        m = ct_variants.match_reference_variant(tcg, *offer, era_missing=hd.era_missing)
+        m, hd, offer = ct_variants.match_offer(
+            tcg, first_edition, foil, rarity, ref_rarity=card.get("rarity"),
+            set_released=self.last_set_release_date, set_code=set_code)
         self._set_ref(m, tcg, offer, hd.era_missing, rarity)
         upd = (card.get("tcgplayer") or {}).get("updatedAt")
         self.last_ref_data_at = _iso_date(upd)
@@ -2415,7 +2411,7 @@ class TcgCsvFallbackProvider(PricingProvider):
                     rar_all[key] = rars[key]
         self.__dict__.setdefault("_rarity_map", {})[ct_set_code] = rar_all
         self.__dict__.setdefault("_group_name", {})[ct_set_code] = gname_map
-        dates = sorted(d for d in (ct_variants._iso(p) for _g, p in group_meta) if d)
+        dates = sorted(d for d in (ct_variants.valid_published_on(p) for _g, p in group_meta) if d)
         self.__dict__.setdefault("_set_released", {})[ct_set_code] = dates[0] if dates else None
         self._set_index[ct_set_code] = index
         self._pid_index[ct_set_code] = pid_map
@@ -2540,11 +2536,10 @@ class TcgCsvFallbackProvider(PricingProvider):
         rel = (self.__dict__.get("_set_released") or {}).get(set_code)
         self.last_set_release_date = rel
         prod_rarity = (self.__dict__.get("_rarity_map") or {}).get(set_code, {}).get(key)
-        hd = ct_variants.holo_detection(rarity, prod_rarity, set_released=rel, set_code=set_code)
-        offer = ct_variants.offer_variant(first_edition, foil, hd.is_holo)
         gname = (self.__dict__.get("_group_name") or {}).get(set_code, {}).get(key)
-        m = ct_variants.match_reference_variant(variants, *offer, group_name=gname,
-                                                era_missing=hd.era_missing)
+        om = ct_variants.match_offer(variants, first_edition, foil, rarity, ref_rarity=prod_rarity,
+                                     set_released=rel, set_code=set_code, group_name=gname)
+        m, hd, offer = om
         self._set_ref(m, variants, offer, hd.era_missing, rarity)
         self.last_ref_data_at = self._dump_at()
         self.last_price_source = "tcgcsv"

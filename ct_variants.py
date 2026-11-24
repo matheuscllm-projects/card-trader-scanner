@@ -144,7 +144,8 @@ def holo_detection(*rarities: Optional[str], set_released=None,
     """
     rel = _iso(set_released)
     needs_era = False
-    if (set_code or "").lower() in HOLO_ONLY_SETS:
+    if ((set_code or "").lower() in HOLO_ONLY_SETS
+            and not any(_NON_HOLO.search((r or "").lower()) for r in rarities)):   # rótulo "Non-Holo" explícito vence
         return HoloDetection(True, False, "set")
     for r in rarities:
         rl = _NON_HOLO.sub("", (r or "").lower())
@@ -303,3 +304,57 @@ def match_reference_variant(prices: dict, edicao: str, acabamento: str,
         if c[1] == acabamento:
             return Match(k, OK, "", c)
     return inc(f"sem preço {want}")
+
+
+_PUBLISHED_OK = re.compile(r"^(\d{4}-\d{2}-\d{2})T00:00:00$")
+
+
+def valid_published_on(value) -> Optional[str]:
+    """`publishedOn` de group do tcgcsv -> 'YYYY-MM-DD' SÓ se tem o formato de data real
+    (`...T00:00:00`). Em 2026-11-24, 19 groups (POP Series 1-9, EX Trainer Kits, promos...) trazem o
+    CARIMBO DO LOTE (`2026-11-23T20:00:05.735172Z`): não é data de lançamento (None = era
+    não informada -> detecção conservadora)."""
+    m = _PUBLISHED_OK.match(str(value or "").strip())
+    return m.group(1) if m else None
+
+
+class OfferMatch(NamedTuple):
+    match: "Match"
+    hd: "HoloDetection"
+    offer: tuple
+
+
+def match_offer(prices: dict, first_edition: bool, reverse: bool, ct_rarity: Optional[str],
+                ref_rarity: Optional[str] = None, set_released=None, set_code: Optional[str] = None,
+                group_name: Optional[str] = None) -> OfferMatch:
+    """Caminho INTEIRO: acabamento da oferta (a partir das raridades) + casamento exato.
+
+    Rótulos em conflito (B1f): a raridade da CardTrader é CONCLUSIVA p/ não-holo e a do produto diz
+    holo -> se o produto também tem impressão normal (a cópia não-holo existe) o acabamento NÃO é
+    presumido: INCOMPATIVEL. Só quando o produto não tem impressão normal (a carta só existe em
+    holo: Rayquaza viv 138 "Amazing Rare") vale o holo. CT holo + produto não-holo já dá
+    INCOMPATIVEL pela regra exata."""
+    hd_ct = holo_detection(ct_rarity, set_released=set_released, set_code=set_code)
+    hd = hd_ct
+    conflict = None
+    if not reverse:
+        if not hd_ct.is_holo:
+            hd_ref = holo_detection(ref_rarity, set_released=set_released)
+            if hd_ref.is_holo:
+                normal_keys = sorted(k for k, c in _usable(prices).items() if c[1] == FIN_NORMAL)
+                if rarity_conclusive(ct_rarity) and normal_keys:
+                    conflict = (f"raridades em conflito (CardTrader: {ct_rarity!r}; referência: "
+                                f"{ref_rarity!r}) — a carta tem impressão normal ({', '.join(normal_keys)}); "
+                                "o acabamento não é presumido")
+                else:
+                    hd = hd_ref
+            elif hd_ref.era_missing:
+                hd = HoloDetection(False, True, "")
+    else:
+        hd = holo_detection(ct_rarity, ref_rarity, set_released=set_released, set_code=set_code)
+    offer = offer_variant(first_edition, reverse, hd.is_holo)
+    if conflict:
+        avail = ", ".join(sorted(_usable(prices)))
+        return OfferMatch(Match(None, INCOMPATIVEL, f"{conflict} (disponíveis: {avail})", None), hd, offer)
+    m = match_reference_variant(prices, *offer, group_name=group_name, era_missing=hd.era_missing)
+    return OfferMatch(m, hd, offer)
