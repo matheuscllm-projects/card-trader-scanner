@@ -255,7 +255,7 @@ def test_mediana_pc_exclui_graduadas_e_lotes():
     html = open(os.path.join(os.path.dirname(__file__), "fixtures", "pricecharting_real",
                              "lugia_unlimited.html"), encoding="utf-8").read()
     sales = pcr.parse_sold_listings(html)
-    med, n = pp.pc_median_ungraded(html)
+    med, n = pcr.median_ungraded_sold(html)
     keep = [s for s in sales if pcr._exclusion_reason(s["title"]) is None]
     assert n > 0 and med == pcr.median_recent_sold(keep)[0]
 

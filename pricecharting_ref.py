@@ -82,12 +82,19 @@ FIRECRAWL_SCRAPE_URL = "https://api.firecrawl.dev/v1/scrape"
 FIRECRAWL_RETRY_WAIT_S = 3.0
 
 
+MAX_FIRECRAWL_CREDITS_PER_RUN = 100   # teto por run autorizado pelo dono (2026-11-24)
+
+
 def set_firecrawl_budget(n: int) -> None:
     """Libera até `n` páginas via Firecrawl quando o PriceCharting bloquear (403/429).
 
     O teto é "quem chega primeiro": a ORDEM DE PRIORIDADE (linhas de maior valor
     primeiro, para que o orçamento acabe nas de menor valor) é responsabilidade do
-    CHAMADOR — este módulo não reordena nada."""
+    CHAMADOR — este módulo não reordena nada. Acima de `MAX_FIRECRAWL_CREDITS_PER_RUN`
+    → ValueError (o módulo recusa o orçamento; nada é configurado)."""
+    if int(n or 0) > MAX_FIRECRAWL_CREDITS_PER_RUN:
+        raise ValueError(f"orçamento Firecrawl {n} acima do teto de "
+                         f"{MAX_FIRECRAWL_CREDITS_PER_RUN} créditos por run (autorização do dono)")
     _firecrawl_budget[0] = _firecrawl_cap[0] = max(0, int(n or 0))
     _firecrawl_used[0] = 0
 
@@ -428,10 +435,32 @@ def resolve_pc_ref(card_name, number, set_label,
     # ATENÇÃO (2026-11-24): o regex antigo só lia ids numéricos, então as vendas
     # reais da TCGplayer (id `tcgplayer-nvAA+SAKFVCy`) NUNCA entravam nesta mediana;
     # agora entram (eBay + TCGplayer, como o docstring do módulo sempre disse).
-    median, n_sales = median_recent_sold(parse_sold_listings(page))
+    median, n_sales = median_ungraded_sold(page)
     if median is None:
         return None
     return {"median": median, "n_sales": n_sales, "url": BASE_URL + path}
+
+
+def median_ungraded_sold(body: str, n: int = MEDIAN_WINDOW):
+    """ÚNICA mediana de referência: as `n` vendas mais recentes da página, EXCLUINDO
+    graduadas, lotes e outro idioma (`_exclusion_reason`, o mesmo filtro do sinal de
+    demanda). A página é a da edição já resolvida pelo chamador (`edition_slug_ok`).
+    Sem venda comparável → (None, 0)."""
+    sales = [s for s in parse_sold_listings(body) if _exclusion_reason(s.get("title")) is None]
+    return median_recent_sold(sales, n)
+
+
+FINISH_REVERSE_NAO_CONFIRMAVEL = "ACABAMENTO_REVERSE_NAO_CONFIRMAVEL"
+
+
+def finish_status(variant) -> str:
+    """Acabamento da página PC × oferta. LACUNA (2026-11-24): as 4 páginas reais em
+    tests/fixtures/pricecharting_real/ não têm nenhum rótulo de acabamento (nem
+    'reverse'; o título só rotula a edição), então NÃO há padrão provado para confirmar
+    que uma página é a reverse. Oferta reverse → FINISH_REVERSE_NAO_CONFIRMAVEL; as
+    demais → 'NAO_REVERSE' (a busca já recusa slugs com 'reverse' para elas). Para
+    liberar reverse falta capturar UMA página real reverse (ex.: .../mr-mime-reverse-holo-95)."""
+    return FINISH_REVERSE_NAO_CONFIRMAVEL if "reverse" in str(variant or "").lower() else "NAO_REVERSE"
 
 
 EDITIONS = ("1st", "unl")   # vocabulário canônico (ct_variants.offer_variant)

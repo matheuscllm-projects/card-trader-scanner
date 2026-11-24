@@ -1077,14 +1077,6 @@ def _fmt_dh(v) -> str:
 PC_DIVERGENCE_RATIO = 0.30
 
 
-def pc_median_ungraded(body: str, n: int = pricecharting_ref.MEDIAN_WINDOW):
-    """Mediana das `n` vendas mais recentes da pagina PC, EXCLUINDO graduadas, lotes e
-    outro idioma (mesmos filtros do sinal de demanda). (None, 0) sem venda comparavel."""
-    sales = [s for s in pricecharting_ref.parse_sold_listings(body)
-             if pricecharting_ref._exclusion_reason(s.get("title")) is None]
-    return pricecharting_ref.median_recent_sold(sales, n)
-
-
 def _row_edition(row):
     """'1st' | 'unl' | None. Coluna `Edição` ausente (XLSX antigo) → None = NAO informada
     (nunca presume Unlimited). Coluna presente: '1st Edition' → '1st'; 'Unlimited' ou
@@ -1135,7 +1127,7 @@ def attach_pc_refs(df: pd.DataFrame, cfg: DecisionConfig, top_md: int,
         if ed is None:
             df.at[idx, "pc_status"] = "EDICAO_NAO_INFORMADA"
         elif _is_reverse_offer(row):
-            df.at[idx, "pc_status"] = "ACABAMENTO_REVERSE_NAO_CONFIRMAVEL"
+            df.at[idx, "pc_status"] = pricecharting_ref.FINISH_REVERSE_NAO_CONFIRMAVEL
         else:
             keys[idx] = _pc_key(row, ed)
     cand = [i for i in keys
@@ -1157,7 +1149,7 @@ def attach_pc_refs(df: pd.DataFrame, cfg: DecisionConfig, top_md: int,
         med = n_med = None
         if res.get("pc_status") == "OK" and res.get("pc_url"):
             try:
-                med, n_med = pc_median_ungraded(fetch(res["pc_url"], cache_dir=cache_dir))
+                med, n_med = pricecharting_ref.median_ungraded_sold(fetch(res["pc_url"], cache_dir=cache_dir))
             except Exception:  # noqa: BLE001 — mediana e extra; a liquidez ja foi lida
                 med = None
         ok += res.get("pc_status") == "OK"
@@ -1632,7 +1624,7 @@ def _read_fx_usd_brl(input_path: Path) -> float | None:
     return None
 
 
-MAX_PC_FIRECRAWL = 100   # teto por scan autorizado pelo dono (2026-11-24)
+MAX_PC_FIRECRAWL = pricecharting_ref.MAX_FIRECRAWL_CREDITS_PER_RUN   # teto do dono (2026-11-24)
 EXTRA_SHEETS = ("Sem preço", "Sem Preço", "Sem Ref Compatível")
 
 

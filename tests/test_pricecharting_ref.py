@@ -352,7 +352,7 @@ def test_delivery_with_pc_columns_and_link():
     pp.attach_pc_refs(df, cfg, top_md=50, limit=50, demand_resolver=dem, page_fetcher=_fetch)
     md = pp.build_delivery_markdown(df, cfg, fx_usd_brl=5.0)
     assert "Ref PC US$" in md and "Margem PC %" in md
-    med, _ = pp.pc_median_ungraded(_LUGIA)
+    med, _ = pcr.median_ungraded_sold(_LUGIA)
     assert f"{med:,.2f}" in md
     assert f"[PC]({_PC_URL})" in md
     # Charizard sem PC → "—" na coluna, SEM link [PC] e REVISAR com o motivo da liquidez
