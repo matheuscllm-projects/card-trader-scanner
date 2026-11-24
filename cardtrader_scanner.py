@@ -328,6 +328,7 @@ from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+import ct_refage
 import ct_variants
 from ct_chase import CHASE_ONLY_TIERS, CHASE_TIER_ORDER, classify_chase_tier  # unico dono do chase (informativo)
 from ct_economics import Costs, compute as compute_economics  # unico dono da margem
@@ -1144,6 +1145,7 @@ class Opportunity:
     # "dado de" (data do dado) ou "buscado em" (só a hora da busca, quando a fonte não expõe a data)
     ref_data_at: str = ""
     ref_data_label: str = ""
+    ref_inferred: str = ""   # B1g: acabamento INFERIDO da referência (motivo); "" = declarado pela CardTrader
     ref_swap: str = ""   # B1f: referência da fonte principal (velha) trocada pela do tcgcsv (mais nova)
 
 
@@ -1522,16 +1524,19 @@ class PricingProvider(ABC):
     last_divided: bool = False                   # a carta tem chaves de edição na fonte
     last_era_missing: bool = False
     last_ref_data_at: Optional[str] = None   # data do DADO (não da busca), quando a fonte expõe
+    last_ref_inferred: str = ""              # B1g: texto da inferência de acabamento ("" = declarado)
 
     def _reset_ref(self) -> None:
         self.last_ref_status, self.last_ref_reason, self.last_ref_key = "", "", None
         self.last_ref_exact, self.last_available_keys = False, []
         self.last_offer_variant, self.last_divided, self.last_era_missing = None, False, False
         self.last_ref_data_at = None
+        self.last_ref_inferred = ""
 
     def _set_ref(self, m, prices: dict, offer: tuple, era_missing: bool,
-                 rarity: Optional[str] = None) -> None:
+                 rarity: Optional[str] = None, inferred: Optional[str] = None) -> None:
         self.last_offer_variant, self.last_era_missing = offer, era_missing
+        self.last_ref_inferred = inferred or ""   # B1g: acabamento INFERIDO da referência (texto) ou ""
         self.last_ref_status, self.last_ref_reason = m.status, m.reason
         self.last_ref_key = m.key
         self.last_available_keys = ct_variants.available_keys(prices)
@@ -2060,11 +2065,12 @@ class PokemonTcgIoProvider(PricingProvider):
             self.last_normal_market = cached.get("normal_market")
             self.last_ref_data_at = cached.get("ref_data_at")
             prices = cached.get("prices") or {}
-            m, hd, offer = ct_variants.match_offer(
+            om = ct_variants.match_offer(
                 prices, first_edition, foil, rarity, ref_rarity=self.last_ptcg_rarity,
                 set_released=self.last_set_release_date, set_code=set_code)
+            m, hd, offer = om.match, om.hd, om.offer
             if m.status == ct_variants.OK and m.key == self.last_variant_used:
-                self._set_ref(m, prices, offer, hd.era_missing, rarity)
+                self._set_ref(m, prices, offer, hd.era_missing, rarity, inferred=om.inferred)
                 return cached["market_usd"]
             # entrada de cache que não reproduz o casamento atual: ignora e refaz (nunca serve palpite)
 
@@ -2095,10 +2101,11 @@ class PokemonTcgIoProvider(PricingProvider):
         # v2.24: âncora `normal.market` pro guard reverse-outlier.
         self.last_normal_market = (tcg.get("normal") or {}).get("market")
 
-        m, hd, offer = ct_variants.match_offer(
+        om = ct_variants.match_offer(
             tcg, first_edition, foil, rarity, ref_rarity=card.get("rarity"),
             set_released=self.last_set_release_date, set_code=set_code)
-        self._set_ref(m, tcg, offer, hd.era_missing, rarity)
+        m, hd, offer = om.match, om.hd, om.offer
+        self._set_ref(m, tcg, offer, hd.era_missing, rarity, inferred=om.inferred)
         upd = (card.get("tcgplayer") or {}).get("updatedAt")
         self.last_ref_data_at = _iso_date(upd)
         if m.status != ct_variants.OK:
@@ -2545,8 +2552,8 @@ class TcgCsvFallbackProvider(PricingProvider):
         gname = (self.__dict__.get("_group_name") or {}).get(set_code, {}).get(key)
         om = ct_variants.match_offer(variants, first_edition, foil, rarity, ref_rarity=prod_rarity,
                                      set_released=rel, set_code=set_code, group_name=gname)
-        m, hd, offer = om
-        self._set_ref(m, variants, offer, hd.era_missing, rarity)
+        m, hd, offer = om.match, om.hd, om.offer
+        self._set_ref(m, variants, offer, hd.era_missing, rarity, inferred=om.inferred)
         self.last_ref_data_at = self._dump_at()
         self.last_price_source = "tcgcsv"
         self.last_price_fetched_at = getattr(self, "_fetched_at", {}).get(set_code)
@@ -3264,7 +3271,7 @@ class SourceBreaker:
             bad = [t for ok, lat, t in self._w if (not ok) or lat > self.slow_s]
             self.events.append({"event": "open", "at": bad[0] if bad else self.opened_at,
                                 "opened_at": self.opened_at, "fails": fails, "n": n,
-                                "why": "latência" if slow and fails / n < self.fail_rate else "falhas",
+                                "why": "latência" if slow else "falhas",
                                 "slow_s": self.slow_s})
             return True
         return False
@@ -3826,8 +3833,12 @@ class Scanner:
                 infra_detail[l.uid] = f"tcgcsv: {why_t} | {nc}"
         rescued = len(handled)
         prim = self._primary_name()
-        self._set_by_source = ({"tcgcsv": hits + rescued} if prim == "tcgcsv"
-                               else {prim: hits, "tcgcsv": rescued})
+        src = self.__dict__.get("_set_src") or {}
+        self._set_by_source = ({"tcgcsv": sum(src.values())} if prim == "tcgcsv"
+                               else {prim: src.get(prim, 0), "tcgcsv": src.get("tcgcsv", 0)})
+        for k, v in src.items():
+            if k not in self._set_by_source:
+                self._set_by_source[k] = v
         if rescued:
             self._set_note = f"tcgcsv_rescue_priced_{rescued}_of_{len(pending)}"
         if primary_failed:
@@ -3887,6 +3898,7 @@ class Scanner:
         self._set_total: int = 0
         self._set_note: Optional[str] = None
         self._set_by_source: dict = {}
+        self._set_src: dict = {}
         self._set_breaker_note: Optional[str] = None
         self._set_all: list = []
         self._set_accounted: set = set()
@@ -4321,7 +4333,7 @@ class Scanner:
         ref_label = "dado de" if ref_data_at else ("buscado em" if fetched else "")
         if not ref_data_at:
             ref_data_at = fetched
-        return Opportunity(
+        opp_obj = Opportunity(
             listing=l,
             tcg_market_usd=tcg_market,
             tcg_market_brl=tcg_brl,
@@ -4347,8 +4359,14 @@ class Scanner:
             else (ct_variants.FIN_REVERSE if l.foil else
                   ct_variants.FIN_HOLO if is_holo_card else ct_variants.FIN_NORMAL),
             ref_compatible=self._pa(source_provider, "last_ref_exact", bool, False),
+            ref_inferred=self._pa(source_provider, "last_ref_inferred", str, "") or "",
             ref_data_at=ref_data_at, ref_data_label=ref_label,
         )
+        # B1g: contagem por fonte derivada das LINHAS efetivamente criadas (inclui trocas por idade)
+        src = price_source or self._primary_name()
+        cnt = self.__dict__.setdefault("_set_src", {})
+        cnt[src] = cnt.get(src, 0) + 1
+        return opp_obj
 
     def _opp_edition(self, l: "Listing", provider) -> str:
         """Edição da linha: 1st (oferta 1st), ED_NONE (carta sem divisão de edição) ou unl."""
@@ -4359,6 +4377,19 @@ class Scanner:
         if key is not None and not divided:
             return ct_variants.ED_NONE
         return ct_variants.ED_UNL
+
+    def _alt_breaker(self) -> Optional["SourceBreaker"]:
+        """Disjuntor da 2ª fonte (pokemontcg.io quando o primário é tcgcsv): MESMOS parâmetros do
+        disjuntor principal (--source-*); `scanner.breaker = None` (--no-source-breaker) desliga os dois."""
+        if "breaker" in self.__dict__ and self.breaker is None:
+            return None
+        if "ptcg_alt_breaker" not in self.__dict__:
+            base = self.__dict__.get("breaker")
+            self.ptcg_alt_breaker = (SourceBreaker(window=base.window, min_samples=base.min_samples,
+                                                   fail_rate=base.fail_rate, slow_s=base.slow_s,
+                                                   probe_every_s=base.probe_every_s)
+                                     if base is not None else SourceBreaker())
+        return self.ptcg_alt_breaker
 
     def _not_consulted_text(self, abort_kind: Optional[str], abort_reason: Optional[str]) -> Optional[str]:
         """Frase 'fonte X não consultada: causa' para as ofertas que a fonte principal não alcançou."""
@@ -4391,8 +4422,8 @@ class Scanner:
         if alt is None:
             commit("pokemontcg.io não consultada: não habilitada neste run", "tcgcsv")
             return None
-        brk = self.__dict__.setdefault("ptcg_alt_breaker", SourceBreaker())
-        if brk.is_open:
+        brk = self._alt_breaker()          # None = disjuntor desligado (--no-source-breaker)
+        if brk is not None and brk.is_open:
             if brk.probe_due():
                 brk.mark_probe()
                 probe = getattr(alt, "probe", None)
@@ -4416,8 +4447,13 @@ class Scanner:
         except (requests.ConnectionError, requests.Timeout) as e:
             infra, px = True, None
             log.debug(f"  pokemontcg.io (2ª fonte) falhou {l.card_name}: {e!r}")
+        except Exception as e:  # noqa: BLE001 — fonte OPCIONAL: não derruba o set; a falha vai no motivo da oferta
+            log.warning(f"  pokemontcg.io (fonte alternativa) falhou em {l.card_name}: {type(e).__name__}: {e}")
+            commit(f"pokemontcg.io: fonte alternativa falhou ({type(e).__name__}: {str(e)[:80]})", "tcgcsv")
+            return None
         r1 = getattr(alt, "retry_5xx", 0)
-        brk.record(not (infra or (isinstance(r1, int) and r1 > r0)), time.monotonic() - t0)
+        if brk is not None:
+            brk.record(not (infra or (isinstance(r1, int) and r1 > r0)), time.monotonic() - t0)
         if infra:
             commit("pokemontcg.io consultada e INDISPONÍVEL (falha de rede/5xx)", "tcgcsv")
             return None
@@ -4428,13 +4464,19 @@ class Scanner:
         return None
 
     def _ref_age_days(self, provider) -> Optional[int]:
-        d = _iso_date(getattr(provider, "last_ref_data_at", None))
-        if not d:
-            return None
-        try:
-            return (datetime.now().date() - datetime.strptime(d, "%Y-%m-%d").date()).days
-        except ValueError:
-            return None
+        """Idade (dias) do dado da referência — MESMA função do postprocess (ct_refage); None =
+        desconhecida (a referência não informa a data do dado)."""
+        at = getattr(provider, "last_ref_data_at", None)
+        return ct_refage.ref_age_days(at, ct_refage.LABEL_DATA if at else "", datetime.now().astimezone())
+
+    def _count_inferred(self, opps: list) -> None:
+        """B1g: quantas linhas têm acabamento INFERIDO, por set (resumo e Stats)."""
+        c: dict = {}
+        for o in opps:
+            if getattr(o, "ref_inferred", ""):
+                code = getattr(o.listing, "set_code", "") or "?"
+                c[code] = c.get(code, 0) + 1
+        self.stats["acabamento_inferido"] = "; ".join(f"{k} {v}" for k, v in sorted(c.items()))
 
     def _fresher_tcgcsv(self, exp_code: str, exp_name: str, l: "Listing"):
         """B1f: a referência da fonte principal passou do limite de idade E o tcgcsv tem referência
@@ -4456,9 +4498,10 @@ class Scanner:
         if not px or px <= 0:
             return None
         self.stats["refs_trocadas_por_idade"] = self.stats.get("refs_trocadas_por_idade", 0) + 1
-        new_at = _iso_date(getattr(self.tcgcsv, "last_ref_data_at", None)) or "lote do dia"
+        new_at = _iso_date(getattr(self.tcgcsv, "last_ref_data_at", None)) or "data do lote não informada"
+        new_txt = f"dado de {new_at}" if _iso_date(getattr(self.tcgcsv, "last_ref_data_at", None)) else new_at
         return px, (f"referência trocada: {self._primary_name()} (dado de {old_at}, {age} dias) → "
-                    f"tcgcsv (dado de {new_at})")
+                    f"tcgcsv ({new_txt})")
 
     def _primary_name(self) -> str:
         n = getattr(getattr(self, "pricing", None), "name", None)
@@ -4573,7 +4616,7 @@ class Scanner:
             self._noref_uids = set()
             self._noref_first = {}
             self._infra_failed = {}
-            self._set_by_source, self._set_breaker_note = {}, None
+            self._set_by_source, self._set_breaker_note, self._set_src = {}, None, {}
             try:
                 # v2.6: itera o generator e escreve cada Opportunity no checkpoint
                 # ASSIM QUE for yielded. Antes era `opps.extend(scan_expansion(exp))`
@@ -4673,6 +4716,11 @@ class Scanner:
         self.stats["listings_sem_preco"] = len(self.unpriced_rows)
         self.stats["saude_fonte_principal"] = self._source_health_line() or ""
         self.stats["cobertura_baixa"] = " | ".join(self._low_coverage())
+        self._count_inferred(opps)
+        _by: dict = {}
+        for o in opps:
+            _by[o.price_source or "?"] = _by.get(o.price_source or "?", 0) + 1
+        self.stats["linhas_por_fonte"] = "; ".join(f"{k} {v}" for k, v in sorted(_by.items()))
         for line in self.run_summary_lines():
             log.warning(line) if ("tentar de novo" in line) else log.info(line)
         # Ordena por margem bruta desc (maior oportunidade primeiro)
@@ -4682,22 +4730,32 @@ class Scanner:
     def _source_health_line(self) -> Optional[str]:
         """B1e: frase de saúde da fonte principal (None quando não há disjuntor ativo no run)."""
         brk = self.__dict__.get("breaker")
+        alt = self.__dict__.get("ptcg_alt_breaker")
+        line = self._health_of(brk, "pokemontcg.io")
+        aline = self._health_of(alt, "pokemontcg.io (2ª fonte)") if alt is not None else None
+        parts = [x for x in (line, aline) if x]
+        return "; ".join(parts) or None
+
+    def _health_of(self, brk, label: str) -> Optional[str]:
         if brk is None:
             return None
         opens = [e for e in brk.events if e["event"] == "open"]
+        if not opens and not getattr(brk, "total_n", 0):
+            return None
         if not opens:
             if getattr(brk, "total_fail", 0):
-                return (f"pokemontcg.io saudável neste run, com {brk.total_fail} falha(s) em "
+                return (f"{label} saudável neste run, com {brk.total_fail} falha(s) em "
                         f"{brk.total_n} ofertas (abaixo do limite)")
-            return "pokemontcg.io saudável neste run (disjuntor não abriu)"
+            return f"{label} saudável neste run (disjuntor não abriu)"
         parts = []
         for k, e in enumerate(brk.events):
             if e["event"] == "open":
-                if e.get("why") == "latência":
-                    parts.append(f"pokemontcg.io degradada às {e['at']:%H:%M} por latência (média acima de "
-                                 f"{e.get('slow_s', 0):g} s em {e['n']} ofertas)")
+                if "latência" in e.get("why", ""):
+                    extra = f"; {_n_falhas(e['fails'])} em {e['n']}" if e["fails"] else ""
+                    parts.append(f"{label} degradada às {e['at']:%H:%M} por latência (média acima de "
+                                 f"{e.get('slow_s', 0):g} s em {e['n']} ofertas{extra})")
                 else:
-                    parts.append(f"pokemontcg.io degradada às {e['at']:%H:%M} após {_n_falhas(e['fails'])} "
+                    parts.append(f"{label} degradada às {e['at']:%H:%M} após {_n_falhas(e['fails'])} "
                                  f"em {e['n']}")
             else:
                 parts.append(f"voltou às {e['at']:%H:%M}")
@@ -4767,7 +4825,12 @@ class Scanner:
             for k, v in (o.get("by_source") or {}).items():
                 by[k] = by.get(k, 0) + v
         if by:
-            lines.append("Preços por fonte: " + " | ".join(f"{k} {v}" for k, v in by.items()))
+            sw = (getattr(self, "stats", {}) or {}).get("refs_trocadas_por_idade", 0)
+            lines.append("Preços por fonte: " + " | ".join(f"{k} {v}" for k, v in by.items())
+                         + (f" ({sw} referências trocadas por idade já incluídas)" if sw else ""))
+            if sw:
+                lines.append(f"{sw} referências trocadas por idade (pokemontcg.io velha → tcgcsv); o resgate por "
+                             f"falha/miss da fonte principal é contado à parte (tcgcsv_fallback_priced)")
         r5 = getattr(getattr(self, "pricing", None), "retry_5xx", None)
         if isinstance(r5, int):
             lines.append(f"{r5} retries por 5xx/429 da pokemontcg.io neste run")
@@ -4783,6 +4846,9 @@ class Scanner:
         health = self._source_health_line()
         if health:
             lines.append(health)
+        inf = (getattr(self, "stats", {}) or {}).get("acabamento_inferido")
+        if inf:
+            lines.append(f"Acabamento INFERIDO da referência (Ref Compatível = Inferido; nunca COMPRA), por set: {inf}")
         n = len(getattr(self, "unpriced_rows", []))
         if n:
             lines.append(f"{n} listings sem preço — ver aba 'Sem preço' do XLSX")
@@ -5131,7 +5197,7 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         # B1b: data do DADO da referência + rótulo ("dado de" | "buscado em"); a margem líquida
         # usa só Hub + frete -> sempre PARCIAL, com a lista dos custos não informados.
         "Data Ref.", "Rótulo Data Ref.", "Líquida", "Custos Não Informados",
-        "Troca de Referência",
+        "Troca de Referência", "Acabamento Inferido (motivo)",
     ]
     ws.append(headers)
 
@@ -5183,11 +5249,12 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
             {ct_variants.ED_1ST: "1st Edition", ct_variants.ED_UNL: "Unlimited",
              ct_variants.ED_NONE: ct_variants.ED_NONE_LABEL}.get(opp.edition, ""),
             ct_variants.FIN_LABELS.get(opp.finish, ""),
-            ("" if opp.edition is None else ("Sim" if opp.ref_compatible else "Não")),
+            ("" if opp.edition is None else ("Inferido" if opp.ref_inferred
+                                             else ("Sim" if opp.ref_compatible else "Não"))),
             opp.validation_reason or "",
             opp.ref_data_at or "", opp.ref_data_label or "",
             *_liquid_label(opp, hub_fee_rate),
-            opp.ref_swap or "",
+            opp.ref_swap or "", opp.ref_inferred or "",
         ])
 
     # ─── Formatação ───
@@ -5491,8 +5558,8 @@ def parse_args():
         p.error("--source-fail-rate é FRAÇÃO entre 0 e 1 (ex.: 0.5 = 50%)")
     if args.source_window < 2 or args.source_slow_s <= 0 or args.source_probe_s < 0:
         p.error("--source-window ≥ 2, --source-slow-s > 0 e --source-probe-s ≥ 0")
-    if args.max_ref_age_days <= 0:
-        p.error("--max-ref-age-days deve ser > 0")
+    if not (args.max_ref_age_days > 0) or args.max_ref_age_days == float("inf"):
+        p.error("--max-ref-age-days deve ser um número finito > 0")
     return args
 
 

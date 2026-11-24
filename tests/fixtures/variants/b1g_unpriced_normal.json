@@ -1,0 +1,164 @@
+{
+ "em": [
+  {
+   "gid": 1410,
+   "group": "EX Emerald",
+   "pid": 85633,
+   "name": "Gardevoir",
+   "number": "4/106",
+   "rarity": "Holo Rare",
+   "prices": [
+    [
+     "Normal",
+     null
+    ],
+    [
+     "Holofoil",
+     199.99
+    ],
+    [
+     "Reverse Holofoil",
+     149.5
+    ]
+   ]
+  },
+  {
+   "gid": 1410,
+   "group": "EX Emerald",
+   "pid": 86547,
+   "name": "Kyogre - 006/106",
+   "number": "6/106",
+   "rarity": "Holo Rare",
+   "prices": [
+    [
+     "Normal",
+     null
+    ],
+    [
+     "Holofoil",
+     108.65
+    ],
+    [
+     "Reverse Holofoil",
+     219.0
+    ]
+   ]
+  }
+ ],
+ "dx": [
+  {
+   "gid": 1404,
+   "group": "EX Deoxys",
+   "pid": 89289,
+   "name": "Slaking",
+   "number": "15/107",
+   "rarity": "Holo Rare",
+   "prices": [
+    [
+     "Normal",
+     null
+    ],
+    [
+     "Holofoil",
+     26.0
+    ],
+    [
+     "Reverse Holofoil",
+     39.99
+    ]
+   ]
+  }
+ ],
+ "trr": [
+  {
+   "gid": 1428,
+   "group": "EX Team Rocket Returns",
+   "pid": 84562,
+   "name": "Dark Ampharos",
+   "number": "2/109",
+   "rarity": "Holo Rare",
+   "prices": [
+    [
+     "Normal",
+     null
+    ],
+    [
+     "Holofoil",
+     132.19
+    ],
+    [
+     "Reverse Holofoil",
+     325.0
+    ]
+   ]
+  },
+  {
+   "gid": 1428,
+   "group": "EX Team Rocket Returns",
+   "pid": 84658,
+   "name": "Dark Steelix",
+   "number": "10/109",
+   "rarity": "Holo Rare",
+   "prices": [
+    [
+     "Normal",
+     null
+    ],
+    [
+     "Holofoil",
+     138.66
+    ],
+    [
+     "Reverse Holofoil",
+     299.99
+    ]
+   ]
+  }
+ ],
+ "rg": [
+  {
+   "gid": 1419,
+   "group": "EX FireRed & LeafGreen",
+   "pid": 88276,
+   "name": "Poliwrath",
+   "number": "11/112",
+   "rarity": "Holo Rare",
+   "prices": [
+    [
+     "Normal",
+     null
+    ],
+    [
+     "Holofoil",
+     31.13
+    ],
+    [
+     "Reverse Holofoil",
+     45.17
+    ]
+   ]
+  },
+  {
+   "gid": 1419,
+   "group": "EX FireRed & LeafGreen",
+   "pid": 88507,
+   "name": "Raichu",
+   "number": "12/112",
+   "rarity": "Holo Rare",
+   "prices": [
+    [
+     "Normal",
+     null
+    ],
+    [
+     "Holofoil",
+     65.0
+    ],
+    [
+     "Reverse Holofoil",
+     130.0
+    ]
+   ]
+  }
+ ]
+}

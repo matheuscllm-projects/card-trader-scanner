@@ -61,6 +61,7 @@ from __future__ import annotations
 
 from chat_format import reference_price
 import argparse, os, re, sys
+import ct_refage
 import ct_variants
 import pricecharting_ref
 from ct_chase import classify_chase_tier  # unico dono do chase (informativo)
@@ -344,14 +345,22 @@ def classify_decision(row, cfg: DecisionConfig, check_liquidity: bool = True):
                 "Link TCG antes de comprar")
     # Dono: sem referencia COMPATIVEL (edicao+variante exatas) nao se recomenda compra.
     # Coluna ausente (XLSX de scanner antigo) = scanner nao certificou → nao confirmada.
+    inf = row.get("ref_inferido")
+    inf = str(inf).strip() if inf is not None and not (isinstance(inf, float) and pd.isna(inf)) else ""
+    if inf and inf.lower() != "nan" or str(row.get("ref_compativel")).strip().lower() == "inferido":
+        return "REVISAR", f"acabamento inferido da referência: {inf or 'ver coluna Acabamento Inferido'}; margem {nm:.0%}"
     if str(row.get("ref_compativel")).strip().lower() not in ("sim", "true", "1", "yes"):
         return "REVISAR", ("referência de variante/edição não certificada pelo scanner "
                            "(coluna 'Ref Compatível' ausente ou ≠ Sim)")
     # B1f: referencia velha demais (limite configuravel) nunca vira COMPRA; a margem segue exibida.
-    age = _num(row.get("ref_age_dias"))
-    if age is not None and age > cfg.max_ref_age_days:
-        return "REVISAR", (f"referência desatualizada ({age:.0f} dias); máximo {cfg.max_ref_age_days:g}; "
-                           f"margem {nm:.0%} sobre preço velho")
+    if "ref_age_dias" in row:      # coluna presente (write_report sempre a cria); ausente = chamada direta de teste
+        age = _num(row.get("ref_age_dias"))
+        if age is None:
+            return "REVISAR", (f"idade da referência desconhecida (a fonte não informou a data do dado); "
+                               f"margem {nm:.0%}")
+        if age > cfg.max_ref_age_days:
+            return "REVISAR", (f"referência desatualizada ({age:.0f} dias); máximo {cfg.max_ref_age_days:g}; "
+                               f"margem {nm:.0%} sobre preço velho")
     if not check_liquidity:
         return "COMPRA", ""
     ok, liq = liquidity_verdict(row, cfg)
@@ -425,7 +434,8 @@ COLUMN_ALIASES = {
     "price_source": ["price_source","Fonte Preço","Fonte Preco"],
     "ref_data_at": ["ref_data_at","Data Ref.","Ref. Data/Hora"],   # antigo: hora da busca ("buscado em")
     "ref_data_label": ["ref_data_label","Rótulo Data Ref.","Rotulo Data Ref."],
-    "ref_swap": ["ref_swap","Troca de Referência","Troca de Referencia"],   # B1f: fonte principal velha trocada pelo tcgcsv
+    "ref_swap": ["ref_swap","Troca de Referência","Troca de Referencia"],
+    "ref_inferido": ["ref_inferido","Acabamento Inferido (motivo)"],   # B1f: fonte principal velha trocada pelo tcgcsv
     "variant_low_confidence": ["variant_low_confidence","Variante Baixa Confiança","Variante Baixa Confianca","low_confidence_variant"],
 }
 
@@ -713,7 +723,7 @@ def _sales_text(v, truncado) -> str:
     return f"{'≥' if truncado is True or truncado == 'desconhecido' else ''}{int(n)}"
 
 
-_SHEET_COLS = ["decisao", "porque", "ref_age_dias", "ref_desatualizada", "ref_swap", "chase_tier", "fundamental_score",
+_SHEET_COLS = ["decisao", "porque", "ref_age_dias", "ref_desatualizada", "ref_swap", "ref_inferido", "chase_tier", "fundamental_score",
                "dh_score",  # 2ª opinião DoubleHolo (só se --doubleholo; senão ausente)
                "pc_median_usd", "pc_n_sales", "pc_url",  # Ref PC (só se --pc-refs)
                "pc_status", "edicao", "acabamento",
@@ -1017,13 +1027,14 @@ def _add_ref_age(df: pd.DataFrame, scan_stats: dict | None, cfg: DecisionConfig)
     `ref_desatualizada` (marca textual quando passa do limite)."""
     df = df.copy()
     sa = (scan_stats or {}).get("scanned_at")
-    base = _ref_date(sa) or datetime.now()
+    base = _parse_dt(sa) if sa else None
+    base = base or datetime.now().astimezone()
     ages, marks = [], []
     for _, r in df.iterrows():
-        d = _ref_date(r.get("ref_data_at")) if str(r.get("ref_data_label") or "").strip() == "dado de" else None
-        age = float((base.date() - d.date()).days) if d is not None else float("nan")
-        ages.append(age)
-        marks.append(f"referência desatualizada ({age:.0f} dias)" if age == age and age > cfg.max_ref_age_days else "")
+        a = ct_refage.ref_age_days(r.get("ref_data_at"), r.get("ref_data_label"), base)   # MESMA função do scanner
+        ages.append(float(a) if a is not None else float("nan"))
+        marks.append("idade da referência desconhecida" if a is None
+                     else (f"referência desatualizada ({a} dias)" if a > cfg.max_ref_age_days else ""))
     df["ref_age_dias"], df["ref_desatualizada"] = ages, marks
     return df
 
@@ -1784,6 +1795,9 @@ def build_delivery_markdown(
         _mk = str(row.get("ref_desatualizada") or "").strip()
         if _mk and _mk.lower() != "nan":
             flag = (flag + " · " + _mk).strip(" ·")
+        _in = str(row.get("ref_inferido") or "").strip()
+        if _in and _in.lower() != "nan":
+            flag = (flag + " · acabamento inferido da referência").strip(" ·")
         _sw = str(row.get("ref_swap") or "").strip()
         if _sw and _sw.lower() != "nan":
             flag = (flag + " · " + _sw).strip(" ·")
@@ -2186,6 +2200,8 @@ def build_parser():
 def main():
     parser = build_parser()
     args = parser.parse_args()
+    if not (args.max_ref_age_days > 0) or args.max_ref_age_days == float("inf"):
+        parser.error("--max-ref-age-days deve ser um número finito > 0")
 
     # Paridade com o scanner: aceita `6` ou `0.06` (auto-converte percentual).
     if args.hub_fee > 1.0:

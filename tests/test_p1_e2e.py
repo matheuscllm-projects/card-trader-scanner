@@ -85,6 +85,8 @@ def test_real_xlsx_com_pc_simulado_so_compra_com_liquidez(raw, tmp_path, monkeyp
     raw = raw.copy()
     raw["Edição"] = "Unlimited"
     raw["Ref Compatível"] = "Sim"
+    raw["Data Ref."] = __import__("datetime").date.today().isoformat()   # B1g: idade desconhecida nunca é COMPRA
+    raw["Rótulo Data Ref."] = "dado de"
     calls = []
 
     def fake_demand(name, number, set_label, *, edition, cache_dir=None, variant=None, today=None):
@@ -117,6 +119,8 @@ def test_real_xlsx_com_pc_simulado_so_compra_com_liquidez(raw, tmp_path, monkeyp
 def test_real_xlsx_ref_certificada_mas_sem_consulta_pc_e_revisar_por_liquidez(raw, tmp_path):
     raw = raw.copy()
     raw["Ref Compatível"] = "Sim"
+    raw["Data Ref."] = __import__("datetime").date.today().isoformat()   # B1g: idade desconhecida nunca é COMPRA
+    raw["Rótulo Data Ref."] = "dado de"
     cfg, md, wb = _run(raw, tmp_path)
     rows = _rows(md)
     assert any("liquidez não verificada: NAO_CONSULTADO" in l for l in rows)
