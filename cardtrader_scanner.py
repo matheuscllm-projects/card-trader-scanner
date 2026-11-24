@@ -3360,6 +3360,10 @@ class Scanner:
                       reason: Optional[str] = None) -> None:
         """Oferta sem referência COMPATÍVEL: sem margem, sem recomendação; vai p/ a aba
         "Sem Ref Compatível" (e p/ o checkpoint). NÃO é miss de cobertura. Conta na soma."""
+        self._commit_noref(l, self._noref_row(exp_code, l, provider, status, reason))
+
+    def _noref_row(self, exp_code: str, l: "Listing", provider, status: Optional[str] = None,
+                   reason: Optional[str] = None) -> dict:
         pa = self._pa
         offer = pa(provider, "last_offer_variant", tuple, None) or ct_variants.offer_variant(
             l.first_edition, bool(l.foil), ct_variants.rarity_is_holo(l.rarity))
@@ -3376,6 +3380,9 @@ class Scanner:
             "chaves": ",".join(pa(provider, "last_available_keys", list, [])),
             "status": status or pa(provider, "last_ref_status", str, ""),
         }
+        return row
+
+    def _commit_noref(self, l: "Listing", row: dict) -> None:
         self.__dict__.setdefault("noref_rows", []).append(row)
         self.__dict__.setdefault("_set_accounted", set()).add(l.uid)
         self.__dict__.setdefault("_noref_uids", set()).add(l.uid)
@@ -3482,6 +3489,20 @@ class Scanner:
             if cp is not None:
                 cp.write_unpriced(row)
 
+    def _finalize_noref_pair(self, l: "Listing", second_reason: str,
+                             second_keys: str = "", second_url: str = "") -> None:
+        """Ref incompatível na 1ª fonte e o tcgcsv também não resolveu: UMA linha em "Sem Ref
+        Compatível" (substitui a provisória), com os motivos das DUAS fontes."""
+        first = self.__dict__.setdefault("_noref_first", {}).pop(l.uid, None)
+        if first is None:
+            return
+        row = dict(first)
+        row["motivo"] = f"{first.get('source') or 'pokemontcg'}: {first['motivo']} | tcgcsv: {second_reason}"
+        row["chaves"] = f"{first.get('source') or 'pokemontcg'}[{first['chaves']}] tcgcsv[{second_keys}]"
+        row["source"] = f"{first.get('source') or 'pokemontcg'}+tcgcsv"
+        row["tcg_url"] = first.get("tcg_url") or second_url
+        self._commit_noref(l, row)
+
     def _flush_unaccounted(self, exp_code: str, reason: Optional[str]) -> None:
         """Lote 3c: set interrompido no meio (exceção/Ctrl-C) — toda oferta que
         ainda não virou oportunidade nem linha "Sem preço" vai pra "Sem preço"
@@ -3526,8 +3547,16 @@ class Scanner:
                 continue
             if not price or price <= 0:
                 if self._ref_is_noref(self.tcgcsv):
-                    self._record_noref(exp_code, l, self.tcgcsv)
+                    if l.uid in self.__dict__.get("_noref_first", {}):
+                        pa = self._pa
+                        self._finalize_noref_pair(
+                            l, pa(self.tcgcsv, "last_ref_reason", str, ""),
+                            ",".join(pa(self.tcgcsv, "last_available_keys", list, [])),
+                            pa(self.tcgcsv, "last_tcg_url", str, "") or "")
+                    else:
+                        self._record_noref(exp_code, l, self.tcgcsv)
                 continue
+            self.__dict__.setdefault("_noref_first", {}).pop(l.uid, None)
             handled.add(l.uid)
             opp = self._build_opportunity(l, price, self.tcgcsv)
             if opp is not None:
@@ -3564,6 +3593,15 @@ class Scanner:
             opps, handled, rescue_status = self._rescue_via_tcgcsv(exp_code, exp_name, pending)
             yield from opps
         self.__dict__.setdefault("_set_accounted", set()).update(handled)
+        # B1b: ref incompatível na 1ª fonte que o tcgcsv não resolveu → "Sem Ref Compatível"
+        # com os dois motivos (substitui a linha provisória; nunca vira miss nem fica duplicada)
+        first_map = self.__dict__.setdefault("_noref_first", {})
+        if first_map:
+            why = {"fetch_failed": "indisponível (falha de rede/5xx)",
+                   "no_group": "sem dados do set"}.get(rescue_status or "", "carta não encontrada")
+            for l in pending:
+                if l.uid in first_map and l.uid not in handled:
+                    self._finalize_noref_pair(l, why)
         noref_uids = self.__dict__.setdefault("_noref_uids", set())
         left = [l for l in pending if l.uid not in handled and l.uid not in noref_uids]
         rescued = len(handled)
@@ -3755,12 +3793,13 @@ class Scanner:
         # respondeu sem a carta) e falhas (exceção) — vai pro resgate tcgcsv e,
         # se ainda sobrar, pra aba "Sem preço". Nada some.
         set_misses: list["Listing"] = []
+        set_noref_first: list["Listing"] = []   # B1b: 1ª fonte incompatível → resgate tcgcsv
         set_failed: list["Listing"] = []
         causes: dict[str, str] = {}
 
         def _pending(upto: int) -> list["Listing"]:
             """misses + falhas + listings ainda não alcançados (a partir de `upto`)."""
-            return set_misses + set_failed + all_listings[upto:]
+            return set_misses + set_failed + set_noref_first + all_listings[upto:]
 
         for i, l in enumerate(all_listings, 1):
             # v2.4: wall-clock timeout check antes de cada call de pricing
@@ -3831,7 +3870,13 @@ class Scanner:
             elif (not tcg_market or tcg_market <= 0) and self._ref_is_noref(self.pricing):
                 # B1: carta ENCONTRADA sem referência compatível — sem margem, fora da
                 # contagem de misses (não alimenta o corte por cobertura nem a skip-list).
-                self._record_noref(exp_code, l, self.pricing)
+                if self._tcgcsv_can_fallback() and self.pricing is not self.tcgcsv:
+                    # B1b: tenta o tcgcsv (mesma regra exata) antes de dar como sem ref
+                    self.__dict__.setdefault("_noref_first", {})[l.uid] = self._noref_row(
+                        exp_code, l, self.pricing)
+                    set_noref_first.append(l)
+                else:
+                    self._record_noref(exp_code, l, self.pricing)
             elif not tcg_market or tcg_market <= 0:
                 # v2.13 (frente eficiência): conta miss consecutivo — a fonte
                 # RESPONDEU e não tem a carta (≠ falha). Cap atingido = corte do
@@ -3882,7 +3927,7 @@ class Scanner:
         # Fim natural do set: o que a fonte principal não precificou (misses do
         # fim do set e falhas) vai pro resgate tcgcsv — também com hits prévios.
         yield from self._conclude_set(
-            exp_code, exp_name, set_misses + set_failed, causes, total_listings,
+            exp_code, exp_name, set_misses + set_failed + set_noref_first, causes, total_listings,
             set_tcg_hits)
 
     def _build_opportunity(
@@ -4098,6 +4143,7 @@ class Scanner:
             self._set_unpriced, self._set_note, self._set_total = 0, None, 0
             self._set_all, self._set_accounted = [], set()
             self._noref_uids = set()
+            self._noref_first = {}
             try:
                 # v2.6: itera o generator e escreve cada Opportunity no checkpoint
                 # ASSIM QUE for yielded. Antes era `opps.extend(scan_expansion(exp))`

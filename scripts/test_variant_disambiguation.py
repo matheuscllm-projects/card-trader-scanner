@@ -202,6 +202,17 @@ m = p.market_price_usd("Pichu", "ecard1", "22", foil=True, rarity="Holo Rare")
 assert_eq(m, 120.57, "Pichu ecard1/22 reverse → market=$120.57")
 assert_eq(p.last_variant_used, "reverseHolofoil", "Pichu reverse → variant=reverseHolofoil")
 
+# Test 2b (B1b): Pichu e-Card com `holofoil` SEM rótulo + `1stEditionHolofoil` na pokemontcg.io é
+# AMBÍGUO → sem referência compatível nessa fonte (o scanner tenta o tcgcsv em seguida; coberto
+# em tests/test_b1b.py com chaves limpas do tcgcsv).
+import copy
+_amb = copy.deepcopy(PICHU_ECARD1)
+_amb["tcgplayer"]["prices"]["1stEditionHolofoil"] = {"low": 600.0, "mid": 700.0, "market": 750.00}
+p = make_provider(_amb)
+m = p.market_price_usd("Pichu", "ecard1", "22", foil=False, rarity="Holo Rare")
+assert_eq(m, None, "Pichu ambíguo (holofoil sem rótulo + 1stEditionHolofoil) → None na pokemontcg")
+assert_eq(p.last_ref_status, "VARIANTE_INCOMPATIVEL", "Pichu ambíguo → VARIANTE_INCOMPATIVEL")
+
 # Test 3: Arbok Rare Holo, PADRÃO → holofoil $82.77
 p = make_provider(ARBOK_ECARD1)
 m = p.market_price_usd("Arbok", "ecard1", "3", foil=False, rarity="Holo Rare")
