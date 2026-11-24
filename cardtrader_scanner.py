@@ -2018,10 +2018,9 @@ class PokemonTcgIoProvider(PricingProvider):
             if strict_set_check:
                 # v2.7 Layer 1: rejeita match se set retornado ∉ expected_sets.
                 # Não basta totalCount==1 — precisa bater algum set esperado.
-                for cand in results:
-                    cand_set = (cand.get("set") or {}).get("id", "").lower()
-                    if cand_set in expected_sets:
-                        return cand
+                in_set = [c for c in results if (c.get("set") or {}).get("id", "").lower() in expected_sets]
+                if in_set:
+                    return self._pick_unique(in_set, card_name, number)
                 # Nenhum candidato bate o set_code do CT ou alias
                 first_set = (results[0].get("set") or {}).get("id", "")
                 log.info(
@@ -2029,8 +2028,19 @@ class PokemonTcgIoProvider(PricingProvider):
                     f"≠ api_set={first_set} ({total} candidatos) — '{base_q}'"
                 )
                 continue
-            return results[0]
+            return self._pick_unique(results, card_name, number)
         return None
+
+    @staticmethod
+    def _pick_unique(cands: list, card_name: str, number: str) -> dict:
+        """B1j: vários resultados do mesmo set/número = ambíguo (nunca `results[0]`). Só casa se o número completo
+        (com denominador = printedTotal) ou o nome exato desempata; senão `{"_ambiguous": motivo}`."""
+        if len(cands) == 1:
+            return cands[0]
+        wrapped = [{"name": c.get("name"), "number": f"{c.get('number')}/{(c.get('set') or {}).get('printedTotal')}",
+                    "card": c} for c in cands]
+        chosen, why = ct_variants.resolve_candidates(wrapped, card_name, number)
+        return chosen["card"] if chosen else {"_ambiguous": why}
 
     def market_price_usd(self, card_name: str, set_code: str,
                          collector_number: str,
@@ -2076,6 +2086,11 @@ class PokemonTcgIoProvider(PricingProvider):
 
         card = self._search(card_name, set_code, collector_number)
         if not card:
+            return None
+        if card.get("_ambiguous"):      # B1j: >1 resultado e nenhum dado declarado desempata
+            hd = ct_variants.holo_detection(rarity, set_code=set_code)
+            self._set_ref(ct_variants.Match(None, ct_variants.INCOMPATIVEL, card["_ambiguous"], None), {},
+                          ct_variants.offer_variant(first_edition, foil, hd.is_holo), hd.era_missing, rarity)
             return None
         self.last_tcg_url = (card.get("tcgplayer") or {}).get("url")
         self.last_ptcg_rarity = card.get("rarity")

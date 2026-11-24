@@ -103,3 +103,44 @@ def test_map_tcgcsv_prices_marks_the_same_ambiguity():
                                    {"subTypeName": "Normal", "marketPrice": 5.0}])
     p = prices[0] if isinstance(prices, tuple) else prices
     assert p["normal"]["market"] is None and "ambígua" in p["normal"]["ambiguous"]
+
+
+# ───────── pokemontcg.io: >1 resultado só casa se um dado declarado desempata ─────────
+def _resp(data):
+    r = MagicMock()
+    r.status_code = 200
+    r.json.return_value = {"data": list(data), "totalCount": len(data)}
+    return r
+
+
+def _card(cid, name, number="205", total=165, price=5.0, set_id="sv3pt5"):
+    return {"id": cid, "name": name, "number": number, "rarity": "Rare Holo",
+            "set": {"id": set_id, "releaseDate": "2023/09/22", "printedTotal": total},
+            "tcgplayer": {"url": f"u{cid}", "prices": {"holofoil": {"market": price}}}}
+
+
+def _ptcg(tmp_path, data, name="c.db"):
+    p = sc.PokemonTcgIoProvider.__new__(sc.PokemonTcgIoProvider)
+    p.cache = sc.Cache(db_path=tmp_path / name)
+    p._ptcg_get = MagicMock(return_value=_resp(data))
+    p._search_memo = {}
+    p._reset_ref()
+    return p
+
+
+def test_ptcg_two_results_with_same_name_number_and_set_are_ambiguous(tmp_path):
+    p = _ptcg(tmp_path, [_card("a", "Mew ex", price=5.0), _card("b", "Mew ex", price=50.0)])
+    assert p.market_price_usd("Mew ex", "sv3pt5", "205", rarity="Rare Holo") is None
+    assert p.last_ref_status == cv.INCOMPATIVEL and "referência ambígua: 2 produtos" in p.last_ref_reason
+
+
+def test_ptcg_exact_name_breaks_the_tie_and_a_single_result_is_unchanged(tmp_path):
+    p = _ptcg(tmp_path, [_card("a", "Mew", price=1.0), _card("b", "Mew ex", price=50.0)])
+    assert p.market_price_usd("Mew ex", "sv3pt5", "205", rarity="Rare Holo") == 50.0
+    q = _ptcg(tmp_path, [_card("z", "Mew ex", price=7.0)], "c2.db")
+    assert q.market_price_usd("Mew ex", "sv3pt5", "206", rarity="Rare Holo") == 7.0
+
+
+def test_ptcg_full_number_with_denominator_breaks_the_tie(tmp_path):
+    p = _ptcg(tmp_path, [_card("a", "Mew ex", total=165, price=5.0), _card("b", "Mew ex", total=191, price=50.0)])
+    assert p.market_price_usd("Mew ex", "sv3pt5", "205/165", rarity="Rare Holo") == 5.0
