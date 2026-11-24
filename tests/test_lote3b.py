@@ -104,7 +104,7 @@ def test_119_of_121_priced_is_complete_with_2_unpriced_not_no_coverage(tmp_path,
     _assert_accounted(scanner, opps, 121, code="bs")
     lines = " | ".join(scanner.run_summary_lines())
     assert "0 completos | 1 completos com sem preço | 0 sem cobertura | 0 com falha operacional" in lines, lines
-    assert "bs (2/121)" in lines, lines
+    assert "bs (119/121 precificadas, 2 sem preço)" in lines, lines
 
 
 def test_summary_shows_the_four_outcome_counts(tmp_path, monkeypatch):
@@ -188,31 +188,34 @@ def test_validation_logs_periodic_progress(caplog):
     assert all("erros" in m and "429" in m for m in msgs), msgs
 
 
-def test_validation_results_are_checkpointed_and_resumed(tmp_path):
+def test_validation_results_are_checkpointed_and_resumed_only_with_the_flag(tmp_path):
+    # Lote 3c: retomada é opt-in (--resume-validation), de run que NÃO terminou
     cp_path = tmp_path / "cp.jsonl"
 
     def first(bp, language=None):
         if bp == 2:
-            raise requests.ConnectionError("cai no meio")
+            raise KeyboardInterrupt()   # run 1 morre no meio da validação
         return _live(bp) if bp == 1 else []
 
     cp1 = sc.CheckpointWriter(cp_path, every_n=10)
     s1 = _validator(first)
     run1 = [_opp(1), _opp(2), _opp(3)]
-    s1.validate_per_blueprint(run1, checkpoint=cp1)
+    try:
+        s1.validate_per_blueprint(run1, checkpoint=cp1)
+    except KeyboardInterrupt:
+        pass
     cp1.close()
-    assert [o.validation_status for o in run1] == ["VALIDATED_REAL", "API_ERROR", "STALE"]
+    assert run1[0].validation_status == "VALIDATED_REAL"
 
-    # run interrompido → novo run reaproveita o que já foi validado e refaz só o erro
-    cp2 = sc.CheckpointWriter(cp_path, every_n=10)
+    cp2 = sc.CheckpointWriter(cp_path, every_n=10, resume_validation=True)
     s2 = _validator(lambda bp, language=None: _live(bp))
     run2 = [_opp(1), _opp(2), _opp(3)]
     s2.validate_per_blueprint(run2, checkpoint=cp2)
     cp2.close()
-    called = [c.args[0] for c in s2.ct.list_listings_by_blueprint.call_args_list]
-    assert called == [2], called  # só o API_ERROR é refeito
-    assert [o.validation_status for o in run2] == ["VALIDATED_REAL", "VALIDATED_REAL", "STALE"]
+    called = sorted(c.args[0] for c in s2.ct.list_listings_by_blueprint.call_args_list)
+    assert called == [2, 3], called  # só a 1 (já validada) foi reaproveitada
     assert run2[0].live_price_brl == 100.0 and run2[0].real_net_margin_pct == 0.5
+    assert run2[0].validation_reused is True
 
 
 def test_validation_records_older_than_limit_are_not_reused(tmp_path):
@@ -222,7 +225,7 @@ def test_validation_records_older_than_limit_are_not_reused(tmp_path):
         "_type": "validation", "product_id": 1, "blueprint_id": 1, "seller": "s1",
         "validated_at": old, "validation_status": "VALIDATED_REAL", "live_price_brl": 1.0,
     }) + "\n", encoding="utf-8")
-    cp = sc.CheckpointWriter(cp_path, every_n=10)
+    cp = sc.CheckpointWriter(cp_path, every_n=10, resume_validation=True)
     s = _validator(lambda bp, language=None: _live(bp))
     opps = [_opp(1)]
     s.validate_per_blueprint(opps, checkpoint=cp)
@@ -284,13 +287,15 @@ def test_tcgcsv_5xx_and_exceptions_are_fetch_failures():
     assert prov2.last_prefill_status == "fetch_failed"
 
 
-def test_tcgcsv_groups_failure_is_not_refetched_for_every_set():
+def test_tcgcsv_groups_failure_is_not_refetched_for_every_set(monkeypatch):
+    monkeypatch.setattr(sc.time, "sleep", lambda s: None)
     prov = _provider_with_responses(requests.ConnectionError("fora"))
     for code in ("a", "b", "c"):
         assert prov.prefill_set(code, [code], "Set") is False
         assert prov.last_prefill_status == "fetch_failed"
     group_calls = [c for c in prov.session.get.call_args_list if c.args[0].endswith("/groups")]
-    assert len(group_calls) == 1, len(group_calls)  # cache negativo dentro do run
+    # 1ª busca = N tentativas (retry curto, Lote 3c); sets seguintes: cache negativo
+    assert len(group_calls) == sc.TcgCsvFallbackProvider.GROUPS_ATTEMPTS, len(group_calls)
 
 
 # ───────────── 6: recovery preserva fonte/data-hora e "Sem preço" ───────────

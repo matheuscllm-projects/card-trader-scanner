@@ -25,6 +25,7 @@ subtype, reintroduz a inflação Gengar $146→$1599 e quebra (c)).
 from __future__ import annotations
 
 import sys
+import zlib
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -251,8 +252,8 @@ def test_d_never_substitutes_another_subtype():
 def _listing(card_name, num, set_code="asc", foil=False, rarity="Common",
              price_brl=60.0):
     return Listing(
-        product_id=hash((card_name, num)) & 0xFFFF,
-        blueprint_id=hash((card_name, num, "bp")) & 0xFFFF,
+        product_id=zlib.crc32(repr((card_name, num)).encode()),
+        blueprint_id=zlib.crc32(repr((card_name, num, "bp")).encode()),
         card_name=card_name, set_code=set_code, set_name="Ascended Heroes",
         collector_number=num, condition="Near Mint", language="en",
         price_cents=int(price_brl * 100), price_currency="BRL",

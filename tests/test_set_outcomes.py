@@ -265,7 +265,7 @@ def test_xlsx_has_reference_time_column_and_unpriced_sheet(tmp_path, monkeypatch
                    unpriced=scanner.unpriced_rows)
     wb = load_workbook(out)
     hdr = [c.value for c in wb["Oportunidades"][1]]
-    assert hdr[-2:] == ["Fonte Preço", "Ref. Data/Hora"], hdr[-4:]
+    assert hdr[-4:] == ["Fonte Preço", "Ref. Data/Hora", "Validado em", "Validação"], hdr[-4:]
     assert "Sem preço" in wb.sheetnames, wb.sheetnames
     rows = [[c.value for c in r] for r in wb["Sem preço"].iter_rows(min_row=2)]
     assert any("Card 3" in str(r) for r in rows), rows

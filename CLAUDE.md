@@ -525,11 +525,27 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
 - **Skip-list só para `no_coverage` de verdade:** corte por misses consecutivos
   **e** nada do set precificado (nem pelo resgate) **e** o resgate não falhou.
   Falha operacional **nunca** entra na skip-list.
-- **Validação com retomada:** o resultado de cada validação per-blueprint é
-  gravado no checkpoint; um run interrompido (mesmo `--output`) reaproveita o que
-  foi validado há ≤ 3 h e refaz só o que falta ou deu erro de API. O log mostra
-  progresso (blueprints, erros, 429). Entradas antigas continuam sendo
-  lidas e expiram (TTL 7 dias para `no_coverage_`, `network_error_`, timeouts).
+- **Validação: run novo NUNCA reaproveita validação** (regra do operador: nada
+  de cache de scans anteriores para fundamentar recomendação de compra). Todo run
+  valida do zero; cada linha validada carrega `Validado em` (data/hora com fuso)
+  e `Validação` (`nova` | `reaproveitada`). Única exceção, com opt-in explícito:
+  `--resume-validation` retoma a validação de um run **interrompido** (sem o
+  marcador `validation_complete`) validada há ≤ 3 h, e só para a oferta com o
+  **mesmo preço de oferta e a mesma referência**; a linha reaproveitada sai
+  marcada. Rodar de novo com o mesmo `--output` **arquiva** o checkpoint anterior
+  (`*.prev`, nunca apaga) e começa um checkpoint limpo — oportunidades de dois
+  runs não se misturam no recovery. Referência/câmbio buscados antes do início do
+  run nunca são lidos (`Cache.begin_run`). Ctrl-C no meio: o set em curso vira
+  `operational_failure` (`interrupted_by_user`), o que faltava vai para "Sem
+  preço", sets não iniciados ficam como `interrupted_not_started`, o XLSX parcial
+  e o resumo são escritos e o processo sai com código 130. Exceção inesperada no
+  meio do set: o que faltava vai para "Sem preço" (falha operacional) — a soma
+  precificadas + sem preço = total vale sempre. `/groups` do tcgcsv: 3 tentativas
+  com espera curta e cache negativo de ~3 min dentro do run.
+- ⏱️ **Estimativa de tempo dos grupos do `/scan`: calibrada com 30 validações** (o
+  default antigo `--validate-top 30`); agora o canônico valida TODAS, então a
+  duração por grupo precisa ser **remedida** num scan real (ainda não feito) —
+  trate os "≤~2h30" como estimativa, não garantia.
 - **Resgate tcgcsv:** tudo que a pokemontcg.io não precificou (misses do fim do
   set, falhas, listings não alcançados) é oferecido ao tcgcsv (referência buscada
   **neste run**, mesma escada de variante). Cada linha leva `Fonte Preço` e

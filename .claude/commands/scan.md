@@ -111,6 +111,10 @@ python cardtrader_scanner.py \
   recusa). Grupos escolhidos rodam **em sequência**, cada um em background,
   monitorado. Sets vintage lentos já têm timeout interno maior (df 20min,
   ds/n1/n4 18min) — não mexa em `--per-set-timeout`.
+- ⏱️ **Estimativa de tempo calibrada com 30 validações** (o default antigo):
+  como agora todas as oportunidades são validadas, a duração de cada grupo
+  precisa ser **remedida** num scan real (ainda não feito) — os tempos da tabela
+  são estimativa. Anote a duração real de cada grupo no resumo.
 - Grupo que estourar ~2h30 de relógio: anote a duração real no resumo e
   proponha re-dividir. Grupo que falhar não cancela os demais — registre com a
   saída real e siga.

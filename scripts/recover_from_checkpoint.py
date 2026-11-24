@@ -65,6 +65,7 @@ from cardtrader_scanner import (  # noqa: E402
     Listing,
     Opportunity,
     apply_validation_record,
+    now_iso,
     export_xlsx,
     validation_key,
 )
@@ -114,6 +115,8 @@ def parse_checkpoint(checkpoint_path: Path) -> tuple[list[Opportunity], dict, di
                 unpriced.append({k: v for k, v in obj.items() if k != "_type"})
             elif typ == "validation":
                 validations[f"{obj.get('product_id')}:{obj.get('seller')}"] = obj
+            elif typ == "validation_complete":
+                continue   # Lote 3c: marcador de fim da validação (sem dado)
             elif typ == "set_progress":
                 # PR-F (2026-05-28): telemetria de progresso intra-set (heartbeat
                 # JSONL). NÃO é um deal — ignora silenciosamente no recovery.
@@ -187,7 +190,7 @@ def _reconstruct_opportunity(d: dict) -> Opportunity:
         margin_brl=d["margin_brl"],
         estimated_shipping_brl=d["estimated_shipping_brl"],
         net_margin_pct=d["net_margin_pct"],
-        scanned_at=d.get("scanned_at", datetime.now().isoformat(timespec="seconds")),
+        scanned_at=d.get("scanned_at") or now_iso(),
         validation_status=d.get("validation_status", "NOT_VALIDATED"),
         live_price_brl=d.get("live_price_brl"),
         real_margin_pct=d.get("real_margin_pct"),
