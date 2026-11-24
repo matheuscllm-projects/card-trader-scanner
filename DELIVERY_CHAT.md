@@ -88,3 +88,5 @@ O integrado deve chamar as fontes nesta execução, sem carregar arquivos antigo
   abaixo do corte = REVISAR.
 - Liquidez: ≥5 vendas/90d e ≥1/30d. Firecrawl: teto 100 créditos por scan; sem consulta por orçamento =
   `NAO_CONSULTADO_ORCAMENTO`; a coluna `PC Motivo` traz a causa linha a linha.
+- B1l: COMPRA com PriceCharting `OK` exige mediana válida ("PC compatível sem mediana" = REVISAR); a flag
+  `PC diverge` usa o mesmo `--max-ref-divergence` (0,30) da decisão.

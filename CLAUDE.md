@@ -725,6 +725,14 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
   `NAO_CONSULTADO_ORCAMENTO` (não é falha da fonte). A coluna **"PC Motivo"** diz, linha a linha, por que o PC
   não foi consultado ou não serviu (edição não informada, bloqueio, orçamento…). O rodapé conta consultas
   únicas, duplicadas evitadas, por status, e os créditos usados.
+- **B1l (versão de preço "4", `PRICE_LOGIC_VERSION`):** preço em cache de versão antiga não é reaproveitado.
+  COMPRA com PriceCharting `OK` exige as DUAS referências válidas: PC compatível mas sem mediana (ou TCG
+  ausente/não positivo) vai a REVISAR ("PC compatível sem mediana (motivo)"). A flag "PC diverge" da tabela
+  usa o mesmo `--max-ref-divergence` da decisão (antes era um limite próprio). A skip-list grava o
+  `provider` de quem a escreveu e só vale para ele: entrada sem provider (antiga) ou de outro provider é
+  reavaliada (um `no_coverage` da pokemontcg.io não diz nada sobre o tcgcsv); o log avisa quais sets
+  foram reavaliados por isso. `--no-tcgcsv-fallback` só tem efeito com `--provider pokemontcg` (com o padrão
+  tcgcsv não há fallback tcgcsv a desligar).
 - **Contadores:** o resumo e o rodapé contam por fonte (derivados das linhas, não de variáveis soltas),
   incluindo quantas linhas saíram Inferido por set.
 
@@ -954,7 +962,7 @@ completo vive no `CHANGELOG.md`):
   mudou.
 
 - **v2.26** (2026-08-22, #62): `--provider tcgcsv` — tcgcsv.com promovido a
-  fonte primária SELECIONÁVEL (opt-in por run; default segue pokemontcg)
+  fonte primária SELECIONÁVEL (na época opt-in por run, com o default ainda na pokemontcg; desde a B1j o default é tcgcsv)
   após o incidente 500/502 da pokemontcg.io de 2026-08-22; prefill bulk por
   set no `scan_expansion`; set sem groupId único aborta SEM gravar skip-list;
   mapa de abbr vintage G6 (base1/base5/ecard1/ex1/ex3; `wiz`/`bog` fora —
