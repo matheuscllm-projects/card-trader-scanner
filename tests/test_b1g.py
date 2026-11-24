@@ -76,10 +76,16 @@ def test_declared_matches_have_no_inference_and_inferred_ones_say_where_it_came_
 
 
 def test_inconclusive_cardtrader_rarity_policy_is_one_named_decision_point():
-    assert cv.INCONCLUSIVE_CT_RARITY_INFERS_FROM_REFERENCE is False
+    assert cv.NO_INFERENCE_CT_RARITIES == frozenset({"", "promo"})
     prices = {"holofoil": {"market": 14.0}}
     om = cv.match_offer(prices, False, False, "Promo", ref_rarity="Holo Rare", set_released="2019-04-05")
     assert om.match.status == cv.INCOMPATIVEL and om.inferred is None             # promo continua sem referência
+    om = cv.match_offer(prices, False, False, None, ref_rarity="Holo Rare", set_released="2019-04-05")
+    assert om.match.status == cv.INCOMPATIVEL
+    # rótulo desconhecido da CT (BREAK = "Fixed") + produto holo-only: acabamento INFERIDO, não "Sim"
+    om = cv.match_offer({"holofoil": {"market": 5.0}}, False, False, "Fixed", ref_rarity="Rare BREAK",
+                        set_released="2016-08-03")
+    assert om.match.status == cv.OK and om.inferred and "Fixed" in om.inferred
 
 
 def test_inferred_line_is_marked_in_the_xlsx_never_compra_and_counted(tmp_path):
@@ -239,7 +245,7 @@ _ERA_SV, _ERA_ULTRA, _ERA_SECRET = "2023-03-31", "2005-05-10", "2008-11-05"
 
 def _declared(rar, era, code):
     """Acabamento DECLARADO pelo rótulo da CardTrader (tabela à mão; None = inconclusivo)."""
-    if rar in (None, "", "Promo"):
+    if rar in (None, "", "Promo", "Fixed"):      # inconclusivos (CT não declara o acabamento)
         return None
     if rar in ("Common", "Uncommon", "Common Non-Holo", "Non-Holo"):
         return "normal"
@@ -254,7 +260,7 @@ def _declared(rar, era, code):
     raise AssertionError(rar)
 
 
-_CT_R = [None, "", "Promo", "Common", "Uncommon", "Rare", "Holo Rare", "Rare Holo", "Ultra Rare", "Secret Rare",
+_CT_R = [None, "", "Promo", "Fixed", "Common", "Uncommon", "Rare", "Holo Rare", "Rare Holo", "Ultra Rare", "Secret Rare",
          "Illustration Rare", "Non-Holo", "Common Non-Holo"]
 _REF_R = [None, "Common", "Rare", "Holo Rare", "Amazing Rare", "Secret Rare", "Ultra Rare"]
 _KEYS = [("normal",), ("holofoil",), ("reverseHolofoil",), ("normal", "holofoil"), ("normal", "reverseHolofoil"),

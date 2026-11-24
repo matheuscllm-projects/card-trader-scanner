@@ -332,10 +332,15 @@ def valid_published_on(value) -> Optional[str]:
     return m.group(1) if m else None
 
 
-# DECISÃO DO DONO PENDENTE (ponto único e nomeado): quando a raridade da CardTrader é INCONCLUSIVA
-# (vazia/"Promo"/grafia desconhecida) e a raridade do produto diz holo, a oferta pode ser tratada como
-# holo (acabamento INFERIDO da referência) ou ficar SEM referência compatível. Hoje: sem referência.
-INCONCLUSIVE_CT_RARITY_INFERS_FROM_REFERENCE = False
+# DECISÃO DO DONO PENDENTE (ponto único e nomeado): raridades da CardTrader que NUNCA inferem o
+# acabamento da referência — a oferta fica SEM referência compatível. Hoje: vazia e "Promo" (a CT não
+# informa o acabamento). Outro rótulo INCONCLUSIVO (grafia que não conhecemos, ex.: "Fixed" nas cartas BREAK)
+# + produto holo SEM nenhuma impressão normal = acabamento INFERIDO ("Inferido", nunca COMPRA).
+NO_INFERENCE_CT_RARITIES = frozenset({"", "promo"})
+
+
+def _may_infer_from_reference(ct_rarity) -> bool:
+    return str(ct_rarity or "").strip().lower() not in NO_INFERENCE_CT_RARITIES
 
 
 class OfferMatch(NamedTuple):
@@ -389,7 +394,7 @@ def match_offer(prices: dict, first_edition: bool, reverse: bool, ct_rarity: Opt
             elif normal_keys and has_holo:
                 blocked = (f"acabamento da oferta desconhecido (raridade CardTrader {ct_rarity!r} inconclusiva) e a "
                            f"carta tem as duas impressões ({', '.join(normal_keys)} e holofoil); não se presume")
-            elif not normal_keys and INCONCLUSIVE_CT_RARITY_INFERS_FROM_REFERENCE:
+            elif not normal_keys and _may_infer_from_reference(ct_rarity):
                 hd = hd_ref
                 inferred = (f"CardTrader {ct_rarity!r} inconclusiva; acabamento holo deduzido da referência "
                             f"({ref_rarity!r}, sem impressão normal)")
