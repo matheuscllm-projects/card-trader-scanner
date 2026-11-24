@@ -237,6 +237,14 @@ def _reconstruct_opportunity(d: dict) -> Opportunity:
     )
 
 
+def mark_below_min_net(opps: list, min_net: float) -> list:
+    """B1d: mesmo princípio do scanner — só MARCA (log), nunca remove; o corte único é do postprocess."""
+    low = [o for o in opps if (o.real_net_margin_pct or o.net_margin_pct or 0) < min_net]
+    log.info(f"--min-net-margin {min_net:.0%}: {len(low)} de {len(opps)} abaixo do valor (apenas "
+             "marcadas; seguem no XLSX, o postprocess classifica)")
+    return opps
+
+
 def main() -> int:
     p = argparse.ArgumentParser(
         description="Recover XLSX from scanner v2.6 .checkpoint.jsonl",
@@ -292,9 +300,7 @@ def main() -> int:
         )
 
     if args.min_net_margin > 0:
-        before = len(opps)
-        opps = [o for o in opps if (o.real_net_margin_pct or o.net_margin_pct or 0) >= args.min_net_margin]
-        log.info(f"Filtro --min-net-margin {args.min_net_margin:.0%}: {before} → {len(opps)}")
+        opps = mark_below_min_net(opps, args.min_net_margin)
 
     # Re-sort por margem líq REAL (fallback margem bruta) — comportamento equiv
     # ao scanner pós-validação.

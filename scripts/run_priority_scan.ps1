@@ -111,7 +111,7 @@ $header = @(
     "TIER MODE = $tierMode",
     "TIMEOUT   = ${TimeoutMin}min/set",
     "THRESHOLD = $Threshold (fracao)",
-    "MIN NET   = $MinNet (fracao)",
+    "MIN NET   = (nao usado: o scanner nao corta por margem; o corte unico e do postprocess)",
     "PID_PS    = $PID",
     "STAMP     = $Stamp",
     "--- STEP 1: scanner priority-ordered ($($setCodes.Count) sets) ---"
@@ -124,8 +124,6 @@ $scannerArgs = @(
     '-u',
     'cardtrader_scanner.py',
     '--threshold', "$Threshold",
-    '--validate-top', '100',
-    '--min-net-margin', "$MinNet",
     '--per-set-timeout', "$TimeoutMin",
     '--hub-fee', '0.06',
     '--checkpoint-every', '10',

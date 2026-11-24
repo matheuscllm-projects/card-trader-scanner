@@ -99,8 +99,6 @@ $scannerArgs = @(
     '-u',
     'cardtrader_scanner.py',
     '--threshold', '0.30',
-    '--validate-top', '100',
-    '--min-net-margin', '0.20',
     '--per-set-timeout', "$PerSetTimeout",
     '--hub-fee', '0.06',
     '--output', $rawOut,

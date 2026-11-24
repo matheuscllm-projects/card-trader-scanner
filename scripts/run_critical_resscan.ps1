@@ -64,8 +64,6 @@ $scannerArgs = @(
     '--sets'
 ) + $Sets + @(
     '--threshold', '0.30',
-    '--validate-top', '100',
-    '--min-net-margin', '0.20',
     '--per-set-timeout', "$TimeoutMin",
     '--hub-fee', '0.06',
     '--ignore-skip-list',

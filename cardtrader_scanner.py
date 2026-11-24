@@ -1984,8 +1984,10 @@ class PokemonTcgIoProvider(PricingProvider):
             # legítimos (≠429) voltam como Response e viram "sem match" abaixo.
             r = self._ptcg_get({"q": q, "pageSize": 5})
             if r.status_code != 200:
-                log.debug(f"pokemontcg.io erro {r.status_code} para {q}")
-                continue
+                # B1d: 4xx ≠ 429 (401/403…) = credencial/bloqueio, NÃO "carta não encontrada":
+                # vira falha operacional visível e nunca entra na memória de busca.
+                raise requests.ConnectionError(
+                    f"pokemontcg.io HTTP {r.status_code} (credencial/bloqueio?) para {q}")
             resp = r.json()
             results = resp.get("data", [])
             total = resp.get("totalCount", len(results))
@@ -2094,10 +2096,10 @@ class PokemonTcgIoProvider(PricingProvider):
         low = chosen.get("low") or 0.0
         mid = chosen.get("mid") or 0.0
         try:
-            card["_variant_used"] = m.key
+            card_to_cache = {**card, "_variant_used": m.key}   # não muta o dict da memória de busca
         except (TypeError, AttributeError):
-            pass
-        self.cache.set_price(cache_key, market, low, mid, card)
+            card_to_cache = card
+        self.cache.set_price(cache_key, market, low, mid, card_to_cache)
         self.last_price_fetched_at = now_iso()
         return market
 
@@ -5432,9 +5434,8 @@ def main():
     # v2.22 (2026-06-22): sob o contrato de entrega (keep_all_priced), os
     # near-misses (below_threshold=True) NÃO podem ser descartados pelos
     # filtros pós-validação, senão um scan sem deal acima do threshold volta a
-    # esvaziar o XLSX → "nenhum listing precificado". Solução: os filtros duros
-    # (status inválido, --min-net-margin) só culam o SUBCONJUNTO de
-    # OPORTUNIDADES; os near-miss precificados ficam preservados como referência
+    # esvaziar o XLSX → "nenhum listing precificado". Solução: a validação opera só no
+    # SUBCONJUNTO de OPORTUNIDADES; os near-miss precificados ficam preservados como referência
     # pro fallback near-miss do postprocess. Em --opportunities-only (legado),
     # não há near-miss na lista, então o comportamento é idêntico ao antigo.
     near_misses = [o for o in opps if o.below_threshold] if scanner.keep_all_priced else []
@@ -5452,9 +5453,8 @@ def main():
             log.error("Interrompido durante a validação — linhas ainda não validadas "
                       "ficam NOT_VALIDATED; XLSX parcial será escrito.")
 
-        # Linhas não validadas (erro de API, STALE...) ficam com o status real;
-        # só o corte --min-net-margin (explícito) remove, e é logado.
-        before = len(opps)
+        # Nenhuma linha sai aqui: --min-net-margin só MARCA (log + contador); o corte único
+        # é do postprocess. Linhas não validadas ficam com o status real.
         opps, cut = apply_validation_filters(opps, args.min_net_margin)
         scanner.stats["opps_marcadas_min_net"] = len(cut)
 

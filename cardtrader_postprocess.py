@@ -1455,7 +1455,7 @@ def _extra_blocks_markdown(extra_blocks) -> str:
         c_mot = col("Motivo", "motivo")
         c_ct, c_tcg = col("Link CardTrader", "Link CT", "link_ct"), col("Link TCG", "link_tcg")
         c_ed, c_ac = col("Edição", "edicao"), col("Acabamento", "acabamento")
-        c_sel, c_brl = col("Seller", "Vendedor", "seller"), col("CT R$", "ct_price_brl")
+        c_sel, c_brl = col("Seller", "Vendedor", "seller"), col("CT R$", "ct_price_brl", "Scan R$ (raw)")
         out += [f"\n\n### {name} — {len(ex)} linha(s), sem margem (não é recomendação)",
                 "", "| # | Carta | Set | Edição/Acab. | Qtd | Vendedor | CT R$ | Motivo | Links |",
                 "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
