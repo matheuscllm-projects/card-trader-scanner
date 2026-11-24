@@ -109,8 +109,8 @@ def test_primary_tcgcsv_prefills_and_prices_whole_set():
     assert len(opps) == 2, [o.listing.card_name for o in opps]
     assert all(o.price_source == "tcgcsv" for o in opps), \
         [o.price_source for o in opps]
-    # prefill aconteceu (groups + products + prices = 3 GETs, 1× por set)
-    assert tcgcsv.session.get.call_count == 3, tcgcsv.session.get.call_count
+    # prefill aconteceu (groups + products + prices + last-updated do dump = 4 GETs, 1× por set)
+    assert tcgcsv.session.get.call_count == 4, tcgcsv.session.get.call_count
     # papel primário NÃO é fallback: contadores de resgate intactos
     assert scanner.stats["tcgcsv_fallback_sets"] == 0
     assert scanner.stats["tcgcsv_fallback_priced"] == 0

@@ -70,8 +70,8 @@ $header | Set-Content -LiteralPath $logFile -Encoding utf8
 
 # Scanner args:
 #   --threshold 0.30           (gross margin pre-validation)
-#   --validate-top 100         (validate top 100 deals via per-blueprint)
-#   --min-net-margin 0.20      (post-validation net margin floor)
+#   (sem --validate-top: valida TODAS as oportunidades)
+#   (sem --min-net-margin: o corte único de margem é do postprocess)
 #   --per-set-timeout 15       (15 min per-set; matches last good weekly)
 #   --hub-fee 0.06             (paridade postprocess)
 #   --checkpoint-every 10      (default v2.6, JSONL crash-safe)
@@ -79,8 +79,6 @@ $scannerArgs = @(
     '-u',
     'cardtrader_scanner.py',
     '--threshold', '0.30',
-    '--validate-top', '100',
-    '--min-net-margin', '0.20',
     '--per-set-timeout', '15',
     '--hub-fee', '0.06',
     '--checkpoint-every', '10',

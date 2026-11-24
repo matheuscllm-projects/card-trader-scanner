@@ -86,7 +86,9 @@ def test_no_group_id_with_a_prior_hit_is_not_skiplisted(tmp_path, monkeypatch):
     opps, done, skip = _run(scanner, listings, tmp_path, monkeypatch)
     assert [o.listing.card_name for o in opps] == ["Card 1"]
     # set coberto (1 precificada) com 5 sem referência ≠ "sem cobertura"
-    assert skip == {} and done[0]["status"] == "complete_with_unpriced" and done[0]["unpriced"] == 5
+    # B1b: cortado com ofertas não alcançadas = cobertura interrompida (tentar de novo), nunca "completo"
+    assert skip == {} and done[0]["status"] == "operational_failure" and done[0]["unpriced"] == 5
+    assert done[0]["reason"].startswith("coverage_interrupted_")
     _assert_accounted(scanner, opps, 6)
 
 

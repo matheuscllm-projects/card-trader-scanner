@@ -202,14 +202,14 @@ def test_markdown_dh_column_present_with_flag():
 def test_markdown_no_dh_without_flag_is_unchanged():
     df, cfg = _enriched_with_dh(show=False)  # sem attach → sem coluna dh_score
     md = pp.build_delivery_markdown(df, cfg, fx_usd_brl=5.0, show_dh=False)
-    expected = ("| # | Margem % | CT US$ | TCG US$ | Dif | Carta | Set | "
-                "Raridade | Cond | Qtd | Vendas 30d | Vendas 90d | Flag | Links |")
+    expected = ("| # | Margem % | CT US$ | TCG US$ | Dif | Carta | Edição | Acabamento | Set | "
+                "Raridade | Cond | Qtd | Vendas 30d | Vendas 90d | Fonte ref. | Data ref. | Flag | Links |")
     assert expected in md
     assert " DH " not in md
     assert "2ª opinião Double Holo" not in md
     # cada linha de dado tem 12 colunas (13 pipes) — inalterado
     data_rows = [l for l in md.splitlines() if l.startswith("| 1 |")]
-    assert data_rows and data_rows[0].count("|") == 15
+    assert data_rows and data_rows[0].count("|") == 19  # B1b: +4 colunas
 
 
 def test_markdown_show_dh_flag_without_column_is_noop():
@@ -219,7 +219,7 @@ def test_markdown_show_dh_flag_without_column_is_noop():
     md = pp.build_delivery_markdown(df, cfg, fx_usd_brl=5.0, show_dh=True)
     assert " DH " not in md
     data_rows = [l for l in md.splitlines() if l.startswith("| 1 |")]
-    assert data_rows and data_rows[0].count("|") == 15
+    assert data_rows and data_rows[0].count("|") == 19  # B1b: +4 colunas
 
 
 if __name__ == "__main__":

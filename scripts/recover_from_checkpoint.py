@@ -68,6 +68,7 @@ from cardtrader_scanner import (  # noqa: E402
     now_iso,
     export_xlsx,
     validation_key,
+    validation_key_from_record,
 )
 
 
@@ -115,7 +116,7 @@ def parse_checkpoint(checkpoint_path: Path) -> tuple[list[Opportunity], dict, di
             elif typ == "unpriced":
                 unpriced.append({k: v for k, v in obj.items() if k != "_type"})
             elif typ == "validation":
-                validations[f"{obj.get('product_id')}:{obj.get('seller')}"] = obj
+                validations[validation_key_from_record(obj)] = obj
             elif typ == "noref":
                 noref.append({k: v for k, v in obj.items() if k != "_type"})
             elif typ == "validation_complete":
@@ -227,11 +228,21 @@ def _reconstruct_opportunity(d: dict) -> Opportunity:
         below_threshold=d.get("below_threshold", False),
         validated_at=d.get("validated_at", "") or "",
         validation_reused=bool(d.get("validation_reused", False)),
-        edition=d.get("edition", "unl"),
-        finish=d.get("finish", "normal"),
+        edition=d.get("edition"),     # ausente (checkpoint antigo) = NÃO INFORMADA (None)
+        finish=d.get("finish"),
+        ref_data_at=d.get("ref_data_at", "") or "",
+        ref_data_label=d.get("ref_data_label", "") or "",
         ref_compatible=bool(d.get("ref_compatible", False)),
         validation_reason=d.get("validation_reason", "") or "",
     )
+
+
+def mark_below_min_net(opps: list, min_net: float) -> list:
+    """B1d: mesmo princípio do scanner — só MARCA (log), nunca remove; o corte único é do postprocess."""
+    low = [o for o in opps if (o.real_net_margin_pct or o.net_margin_pct or 0) < min_net]
+    log.info(f"--min-net-margin {min_net:.0%}: {len(low)} de {len(opps)} abaixo do valor (apenas "
+             "marcadas; seguem no XLSX, o postprocess classifica)")
+    return opps
 
 
 def main() -> int:
@@ -289,9 +300,7 @@ def main() -> int:
         )
 
     if args.min_net_margin > 0:
-        before = len(opps)
-        opps = [o for o in opps if (o.real_net_margin_pct or o.net_margin_pct or 0) >= args.min_net_margin]
-        log.info(f"Filtro --min-net-margin {args.min_net_margin:.0%}: {before} → {len(opps)}")
+        opps = mark_below_min_net(opps, args.min_net_margin)
 
     # Re-sort por margem líq REAL (fallback margem bruta) — comportamento equiv
     # ao scanner pós-validação.

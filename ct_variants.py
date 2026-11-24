@@ -98,7 +98,13 @@ HOLO_NATURAL_NAMES = (
 )
 # Grafias de ptcg.io com palavras diferentes das do tcgcsv (alias por nome; a ordem
 # de palavras ja e normalizada pelo conjunto de palavras).
-_ALIASES = {"rare prism star": "prism rare"}
+_ALIASES = {"rare prism star": "prism rare",
+            # grafia REAL da CardTrader (leitura 2026-11-24, fst 266/270/271): "Illustraion"
+            "special illustraion rare": "special illustration rare"}
+# Sets em que TODA carta é holofoil. Evidência (tcgcsv grupo 2409, 2026-11-24; ver
+# tests/fixtures/variants/b1e_evidence.json): 18/18 cartas só têm chave Holofoil (0 Normal,
+# 0 Reverse) e a CardTrader rotula as 18 como "Promo" (inconclusivo). Só `det`.
+HOLO_ONLY_SETS = {"det": "Detective Pikachu: 18/18 cartas só têm Holofoil no TCGplayer"}
 # Ultra/Secret Rare: tem excecao so ate esta data (ultima excecao observada: Ultra
 # 2005-05-09 EX Emerald; Secret 2016-11-02 XY Evolutions). Daqui em diante, 0 excecao.
 HOLO_FROM = {"ultra rare": "2005-05-10", "secret rare": "2016-11-03"}
@@ -128,7 +134,8 @@ class HoloDetection(NamedTuple):
     basis: str         # texto | natureza | era | ""
 
 
-def holo_detection(*rarities: Optional[str], set_released=None) -> HoloDetection:
+def holo_detection(*rarities: Optional[str], set_released=None,
+                   set_code: Optional[str] = None) -> HoloDetection:
     """Acabamento holo da oferta a partir da(s) raridade(s) (CardTrader, pokemontcg.io, tcgcsv).
 
     Qualquer rotulo holo vence. "Reverse" e "Non-Holo" nao contam (reverse e propriedade da
@@ -137,6 +144,8 @@ def holo_detection(*rarities: Optional[str], set_released=None) -> HoloDetection
     """
     rel = _iso(set_released)
     needs_era = False
+    if (set_code or "").lower() in HOLO_ONLY_SETS:
+        return HoloDetection(True, False, "set")
     for r in rarities:
         rl = _NON_HOLO.sub("", (r or "").lower())
         if not rl or "reverse" in rl:
@@ -155,8 +164,22 @@ def holo_detection(*rarities: Optional[str], set_released=None) -> HoloDetection
     return HoloDetection(False, needs_era, "")
 
 
-def rarity_is_holo(*rarities: Optional[str], set_released=None) -> bool:
-    return holo_detection(*rarities, set_released=set_released).is_holo
+def rarity_conclusive(rarity: Optional[str]) -> bool:
+    """A raridade da CardTrader permite decidir holo/nao-holo? Inconclusiva = vazia, "Promo" ou
+    qualquer grafia fora das listas conhecidas (so p/ EXPLICAR o motivo; nao muda o casamento)."""
+    rl = _NON_HOLO.sub("", (rarity or "").lower()).strip()
+    if not rl:
+        return False
+    if "holo" in rl or "shining" in rl:
+        return True
+    w = _words(rl)
+    return (w in _NATURAL or w in _FROM
+            or w in (frozenset({"rare"}), frozenset({"common"}), frozenset({"uncommon"})))
+
+
+def rarity_is_holo(*rarities: Optional[str], set_released=None,
+                   set_code: Optional[str] = None) -> bool:
+    return holo_detection(*rarities, set_released=set_released, set_code=set_code).is_holo
 
 
 def offer_variant(first_edition: bool, reverse: bool, is_holo: bool) -> tuple[str, str]:
