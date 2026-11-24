@@ -66,7 +66,7 @@ def test_liquida_e_parcial_com_custos_nao_informados_e_frete_por_carta():
 
 
 def test_custos_so_vem_de_flag_explicita():
-    r = _row(_enrich(_raw(), costs=pp.Costs(iof_rate=0.0038)))
+    r = _row(_enrich(_raw(), costs=pp.Costs(iof_rate=0.0038, iof_base="compra_com_hub")))
     assert "iof_rate" not in r["liquida_status"]
 
 
@@ -273,3 +273,11 @@ def test_colunas_de_liquidez_na_tabela_e_dois_links():
     assert "| Vendas 30d | Vendas 90d |" in md and "≥30" in md
     line = next(l for l in md.splitlines() if l.startswith("| 1 |"))
     assert "[oferta](" in line and "[TCG](" in line
+
+
+def test_cli_taxa_sem_base_erro_e_com_base_ok(capsys):
+    args = pp.build_parser().parse_args(["-i", "a", "-o", "b", "--iof", "0.0038",
+                                         "--iof-base", "compra_com_hub"])
+    assert args.iof_base == "compra_com_hub"
+    with pytest.raises(ValueError):
+        pp.Costs(iof_rate=args.iof)

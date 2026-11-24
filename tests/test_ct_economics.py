@@ -14,7 +14,10 @@ from ct_economics import Costs, compute  # noqa: E402
 
 THRESHOLD = 0.30
 ALL_ZERO = dict(hub_fee_rate=0.0, iof_rate=0.0, spread_cambio_rate=0.0, card_fee_rate=0.0,
-                import_tax_rate=0.0, frete_compra_brl=0.0, sell_fee_rate=0.0, frete_venda_brl=0.0)
+                import_tax_rate=0.0, frete_compra_brl=0.0, sell_fee_rate=0.0, frete_venda_brl=0.0,
+                iof_base="compra_com_hub", spread_cambio_base="compra_com_hub",
+                card_fee_base="compra_com_hub", import_tax_base="compra_com_hub",
+                sell_fee_base="venda")
 ZERO = Costs(**ALL_ZERO)
 
 
@@ -54,7 +57,9 @@ def test_custos_padrao_hub6_frete050_resultado_parcial_com_lista():
 
 def test_todos_informados_e_definitivo():
     c = Costs(hub_fee_rate=0.06, iof_rate=0.035, spread_cambio_rate=0.01, card_fee_rate=0.01,
-              import_tax_rate=0.0, frete_compra_brl=0.5, sell_fee_rate=0.1, frete_venda_brl=5)
+              import_tax_rate=0.0, frete_compra_brl=0.5, sell_fee_rate=0.1, frete_venda_brl=5,
+              iof_base="compra_com_hub", spread_cambio_base="compra_com_hub",
+              card_fee_base="compra_com_hub", import_tax_base="compra_com_hub", sell_fee_base="venda")
     e = compute(200, 100, compra_inclui_hub=False, costs=c)
     assert e.liquida_definitiva is True
     assert e.custos_nao_informados == ()
@@ -129,5 +134,81 @@ def test_costs_defaults_e_none_vs_zero():
     c = Costs()
     assert c.hub_fee_rate == 0.06 and c.frete_compra_brl == 0.50
     assert c.iof_rate is None and c.sell_fee_rate is None
-    assert Costs(iof_rate=0).iof_rate == 0.0  # zero explicito = informado
+    assert Costs(iof_rate=0, iof_base="compra_sem_hub").iof_rate == 0.0  # zero explicito = informado
     assert Costs(hub_fee_rate=Decimal("0.06")).hub_fee_rate == 0.06
+
+
+# ───────── bases de incidencia explicitas (decisao do dono, 2026-11-24) ─────────
+from ct_economics import BASES_COMPRA, BASES_VENDA  # noqa: E402
+
+TAXAS = ("iof", "spread_cambio", "card_fee", "import_tax")
+
+
+def _c(**kw):
+    kw.setdefault("hub_fee_rate", 0.06)
+    kw.setdefault("frete_compra_brl", 0.5)
+    return Costs(**kw)
+
+
+def test_bases_sao_um_conjunto_fechado_e_pequeno():
+    assert BASES_COMPRA == ("compra_sem_hub", "compra_com_hub", "compra_com_hub_frete")
+    assert BASES_VENDA == ("venda", "venda_menos_frete")
+
+
+@pytest.mark.parametrize("base,custo", [
+    ("compra_sem_hub", 100 * 1.06 + 0.5 + 0.10 * 100),
+    ("compra_com_hub", 100 * 1.06 + 0.5 + 0.10 * 106),
+    ("compra_com_hub_frete", 100 * 1.06 + 0.5 + 0.10 * 106.5),
+])
+def test_mesma_taxa_bases_diferentes_custos_diferentes(base, custo):
+    c = _c(iof_rate=0.10, iof_base=base)
+    e = compute(300, 100, compra_inclui_hub=False, costs=c)
+    assert e.custo_total == pytest.approx(custo)
+
+
+def test_base_sem_hub_com_compra_ja_com_hub_desfaz_o_hub():
+    # compra 106 ja com Hub 6% -> base sem Hub = 100
+    e = compute(300, 106, compra_inclui_hub=True,
+                costs=_c(iof_rate=0.10, iof_base="compra_sem_hub"))
+    assert e.custo_total == pytest.approx(106 + 0.5 + 10)
+
+
+@pytest.mark.parametrize("nome", TAXAS + ("sell_fee",))
+def test_taxa_sem_base_levanta(nome):
+    with pytest.raises(ValueError, match="base"):
+        Costs(**{f"{nome}_rate": 0.05})
+
+
+@pytest.mark.parametrize("nome", TAXAS)
+def test_base_sem_taxa_ou_base_invalida_levanta(nome):
+    with pytest.raises(ValueError):
+        Costs(**{f"{nome}_base": "compra_sem_hub"})
+    with pytest.raises(ValueError):
+        Costs(**{f"{nome}_rate": 0.05, f"{nome}_base": "qualquer"})
+    with pytest.raises(ValueError):  # base de venda nao vale para custo de compra
+        Costs(**{f"{nome}_rate": 0.05, f"{nome}_base": "venda"})
+
+
+def test_taxa_de_venda_precisa_de_base_de_venda():
+    with pytest.raises(ValueError):
+        Costs(sell_fee_rate=0.1, sell_fee_base="compra_sem_hub")
+    a = compute(200, 100, compra_inclui_hub=False,
+                costs=_c(sell_fee_rate=0.1, sell_fee_base="venda", frete_venda_brl=20))
+    b = compute(200, 100, compra_inclui_hub=False,
+                costs=_c(sell_fee_rate=0.1, sell_fee_base="venda_menos_frete", frete_venda_brl=20))
+    assert a.receita_liquida == pytest.approx(200 - 20 - 20)
+    assert b.receita_liquida == pytest.approx(200 - 20 - 18)
+
+
+def test_definitivo_so_com_todos_informados_com_base():
+    c = _c(iof_rate=0.0038, iof_base="compra_com_hub", spread_cambio_rate=0.01,
+           spread_cambio_base="compra_com_hub", card_fee_rate=0.0, card_fee_base="compra_sem_hub",
+           import_tax_rate=0.0, import_tax_base="compra_com_hub_frete",
+           sell_fee_rate=0.1, sell_fee_base="venda", frete_venda_brl=5)
+    e = compute(200, 100, compra_inclui_hub=False, costs=c)
+    assert e.liquida_definitiva is True and e.custos_nao_informados == ()
+    assert e.custo_total == pytest.approx(106 + 0.5 + 106 * (0.0038 + 0.01))
+    # um a menos -> parcial, com a lista
+    p = compute(200, 100, compra_inclui_hub=False, costs=_c(iof_rate=0.0038, iof_base="compra_com_hub"))
+    assert p.liquida_definitiva is False and "iof_rate" not in p.custos_nao_informados
+    assert p.completude == pytest.approx(3 / 8)

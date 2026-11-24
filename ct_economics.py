@@ -7,8 +7,15 @@ CAMPO QUE ALIMENTA O CORTE (--threshold 0.30): `Economics.margem_venda`
   margem_liquida_venda   = lucro liquido / receita liquida
   roi_liquido_aquisicao  = lucro liquido / custo total de aquisicao
 
-Custos: so Hub (6%) e frete de compra (R$ 0,50/carta) tem valor (decisao do dono).
-Os demais valem None = NAO INFORMADO (diferente de 0). Enquanto houver custo nao
+Custos: so Hub (6%, sobre a compra) e frete de compra (R$ 0,50/carta, fixo) tem valor
+(decisao do dono). IOF, spread cambial, taxa de cartao, imposto de importacao e taxa de
+venda valem None = NAO INFORMADO (diferente de 0) e SO podem ser informados junto com a
+BASE de incidencia (`<nome>_base`), declarada de forma explicita; taxa sem base, base sem
+taxa ou base fora do conjunto fechado -> ValueError. Nenhuma base e presumida.
+Bases de compra (BASES_COMPRA): `compra_sem_hub` (preco sem Hub), `compra_com_hub`
+(preco com Hub), `compra_com_hub_frete` (com Hub mais o frete de compra).
+Bases de venda (BASES_VENDA): `venda` (a referencia), `venda_menos_frete` (referencia
+menos o frete de venda). Enquanto houver custo nao
 informado, as liquidas saem PARCIAIS (`liquida_definitiva=False`, `custos_nao_informados`);
 o calculo parcial trata o nao informado como 0 so para ter um numero, nunca como definitivo.
 
@@ -19,7 +26,7 @@ Entrada invalida -> Economics com `sem_margem_motivo` (nunca None mudo).
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -42,6 +49,13 @@ def _pos(x) -> Optional[float]:
 _RATES = ("hub_fee_rate", "iof_rate", "spread_cambio_rate", "card_fee_rate",
           "import_tax_rate", "sell_fee_rate")
 _BRL = ("frete_compra_brl", "frete_venda_brl")
+BASES_COMPRA = ("compra_sem_hub", "compra_com_hub", "compra_com_hub_frete")
+BASES_VENDA = ("venda", "venda_menos_frete")
+# taxa -> conjunto de bases aceitas (o Hub nao entra: base fixa = compra, decisao do dono)
+_TAXAS_COM_BASE = {"iof_rate": BASES_COMPRA, "spread_cambio_rate": BASES_COMPRA,
+                   "card_fee_rate": BASES_COMPRA, "import_tax_rate": BASES_COMPRA,
+                   "sell_fee_rate": BASES_VENDA}
+_CUSTOS = _RATES + _BRL    # os 8 custos contados em completude/custos_nao_informados
 
 
 @dataclass(frozen=True)
@@ -54,6 +68,12 @@ class Costs:
     import_tax_rate: Optional[float] = None
     sell_fee_rate: Optional[float] = None
     frete_venda_brl: Optional[float] = None
+    # base de incidencia de cada taxa acima; obrigatoria se (e so se) a taxa for informada
+    iof_base: Optional[str] = None
+    spread_cambio_base: Optional[str] = None
+    card_fee_base: Optional[str] = None
+    import_tax_base: Optional[str] = None
+    sell_fee_base: Optional[str] = None
 
     def __post_init__(self):
         for name in _RATES + _BRL:
@@ -65,6 +85,13 @@ class Costs:
                 raise ValueError(f"Costs.{name}={raw!r} invalido "
                                  f"(taxa em [0,1), frete >= 0, finito, nao bool)")
             object.__setattr__(self, name, v)
+        for taxa, aceitas in _TAXAS_COM_BASE.items():
+            base = getattr(self, taxa[:-5] + "_base")
+            if (getattr(self, taxa) is None) != (base is None):
+                raise ValueError(f"Costs: {taxa} e {taxa[:-5]}_base so podem ser informados juntos "
+                                 f"(taxa sem base de incidencia nao e aceita)")
+            if base is not None and base not in aceitas:
+                raise ValueError(f"Costs.{taxa[:-5]}_base={base!r} invalida: use {aceitas}")
 
 
 @dataclass(frozen=True)
@@ -97,7 +124,7 @@ def compute(ref_brl, compra_brl, *, compra_inclui_hub: bool,
     if not isinstance(compra_inclui_hub, bool):
         raise TypeError("compra_inclui_hub deve ser bool explicito")
     costs = costs if costs is not None else Costs()
-    nomes = [f.name for f in fields(Costs)]
+    nomes = list(_CUSTOS)
     # Hub ja embutido no checkout conta como resolvido, nao como "nao informado".
     faltam = tuple(n for n in nomes if getattr(costs, n) is None
                    and not (n == "hub_fee_rate" and compra_inclui_hub))
@@ -112,14 +139,26 @@ def compute(ref_brl, compra_brl, *, compra_inclui_hub: bool,
                          **comum)
 
     g = lambda n: getattr(costs, n) or 0.0  # noqa: E731 - None tratado como 0 so no parcial
-    hub = 0.0 if compra_inclui_hub else g("hub_fee_rate")
+    hub_taxa = costs.hub_fee_rate
+    if compra_inclui_hub:
+        com_hub = compra
+        sem_hub = compra / (1 + hub_taxa) if hub_taxa is not None else None
+    else:
+        sem_hub, com_hub = compra, compra * (1 + g("hub_fee_rate"))
+    frete = g("frete_compra_brl")
+    bases = {"compra_sem_hub": sem_hub, "compra_com_hub": com_hub,
+             "compra_com_hub_frete": com_hub + frete,
+             "venda": ref, "venda_menos_frete": ref - g("frete_venda_brl")}
+    informadas = [(t, bases[getattr(costs, t[:-5] + "_base")]) for t in _TAXAS_COM_BASE
+                  if getattr(costs, t) is not None]
+    if any(b is None for _, b in informadas):
+        return Economics("base 'compra_sem_hub' exige hub_fee_rate com compra ja incluindo Hub",
+                         **comum)
+    incid = {t: g(t) * b for t, b in informadas}
     try:
         lucro_bruto = ref - compra
-        custo = (compra * (1 + hub)
-                 * (1 + g("iof_rate") + g("spread_cambio_rate") + g("card_fee_rate")
-                    + g("import_tax_rate"))
-                 + g("frete_compra_brl"))
-        receita = ref * (1 - g("sell_fee_rate")) - g("frete_venda_brl")
+        custo = com_hub + frete + sum(v for t, v in incid.items() if t != "sell_fee_rate")
+        receita = ref - g("frete_venda_brl") - incid.get("sell_fee_rate", 0.0)
         lucro_liq = receita - custo
         vals = dict(
             lucro_bruto=lucro_bruto, margem_venda=lucro_bruto / ref,

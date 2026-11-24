@@ -63,7 +63,7 @@ from chat_format import reference_price
 import argparse, os, re, sys
 import pricecharting_ref
 from ct_chase import classify_chase_tier  # unico dono do chase (informativo)
-from ct_economics import Costs, compute as compute_economics
+from ct_economics import BASES_COMPRA, BASES_VENDA, Costs, compute as compute_economics
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -1825,6 +1825,12 @@ def build_parser():
     p.add_argument("--sell-fee", type=float, default=None, help="Taxa de venda (fracao) — so se informada")
     p.add_argument("--sell-shipping-brl", type=float, default=None,
                    help="Frete de venda por carta (R$) — so se informado")
+    for _flag, _bases in (("iof", BASES_COMPRA), ("spread-cambio", BASES_COMPRA),
+                          ("card-fee", BASES_COMPRA), ("import-tax", BASES_COMPRA),
+                          ("sell-fee", BASES_VENDA)):
+        p.add_argument(f"--{_flag}-base", choices=_bases, default=None,
+                       help=f"Base de incidencia de --{_flag} (obrigatoria junto com a taxa; "
+                            "nenhuma base e presumida)")
     p.add_argument("--shipping-brl", type=float, default=0.50,
                    help="Frete de compra POR CARTA em R$ (default 0.50, dono; sem desconto por "
                         "quantidade do mesmo vendedor)")
@@ -1888,7 +1894,8 @@ def build_parser():
 
 
 def main():
-    args = build_parser().parse_args()
+    parser = build_parser()
+    args = parser.parse_args()
 
     # Paridade com o scanner: aceita `6` ou `0.06` (auto-converte percentual).
     if args.hub_fee > 1.0:
@@ -1896,16 +1903,23 @@ def main():
               f"percentual; convertendo para fração: {args.hub_fee/100}")
         args.hub_fee = args.hub_fee / 100.0
 
+    try:
+        costs = Costs(hub_fee_rate=args.hub_fee, frete_compra_brl=args.shipping_brl,
+                      iof_rate=args.iof, iof_base=args.iof_base,
+                      spread_cambio_rate=args.spread_cambio, spread_cambio_base=args.spread_cambio_base,
+                      card_fee_rate=args.card_fee, card_fee_base=args.card_fee_base,
+                      import_tax_rate=args.import_tax, import_tax_base=args.import_tax_base,
+                      sell_fee_rate=args.sell_fee, sell_fee_base=args.sell_fee_base,
+                      frete_venda_brl=args.sell_shipping_brl)
+    except ValueError as e:
+        parser.error(str(e))
     cfg = DecisionConfig(
         min_net_margin=args.min_net_margin,
         min_lucro_liq=args.min_lucro,
         revisar_min_net=args.revisar_min_net,
         min_sales_90d=args.min_sales_90d,
         min_sales_30d=args.min_sales_30d,
-        costs=Costs(hub_fee_rate=args.hub_fee, frete_compra_brl=args.shipping_brl,
-                    iof_rate=args.iof, spread_cambio_rate=args.spread_cambio,
-                    card_fee_rate=args.card_fee, import_tax_rate=args.import_tax,
-                    sell_fee_rate=args.sell_fee, frete_venda_brl=args.sell_shipping_brl),
+        costs=costs,
     )
     df = pd.read_excel(args.input)
     print(f"Carregado: {args.input} | {len(df)} rows | cols: {len(df.columns)}")

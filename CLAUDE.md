@@ -97,9 +97,9 @@ ROI sobre aquisição  = (referência − compra) ÷ compra       ← só inform
 Exemplo: compra 75, referência 100 → margem 25% (**não** passa em 30%), ROI 33,3%.
 
 - **Custos:** Hub 6% e frete de R$ 0,50 **por carta** (sem desconto por quantidade do
-  mesmo vendedor). IOF, spread cambial, taxa do cartão, imposto de importação e taxas de
+  mesmo vendedor). IOF, spread cambial, taxa do cartão, imposto de importação e taxa de
   venda são **configuráveis por flag** (`--iof`, `--spread-cambio`, `--card-fee`,
-  `--import-tax`, `--sell-fee`, `--sell-shipping-brl`) e valem "não informado" até alguém
+  `--import-tax`, `--sell-fee`, `--sell-shipping-brl`; cada taxa exige a sua base de incidência, `--iof-base` etc., sem base presumida: compra_sem_hub|compra_com_hub|compra_com_hub_frete; venda|venda_menos_frete) e valem "não informado" até alguém
   informar. Enquanto houver custo não informado, a margem líquida do XLSX sai marcada
   **PARCIAL** (com a lista do que falta) — nunca como definitiva. No chat não aparece
   margem líquida.
