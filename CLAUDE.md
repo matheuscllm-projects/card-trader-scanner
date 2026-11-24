@@ -34,7 +34,7 @@ aponta onde dá pra comprar barato na Europa e revender caro. É o caminho
 
 Invariantes que valem para TODOS os scanners:
 
-- **Margem BRUTA, mínimo 30%** — só `(revenda − compra)/compra`, sem nenhuma taxa embutida (frete, cartão, IOF — o operador calcula por fora).
+- **Margem sobre a VENDA, mínimo 30%** — `(ref − compra)/ref` decide o corte; o ROI `(ref − compra)/compra` é só informativo (não filtra, não classifica, não ordena). Sem nenhuma taxa embutida (frete, cartão, IOF — o operador calcula por fora).
 - **Piso de relevância R$50 (~US$10) — SÓ para cartas avulsas (singles).** Produtos SELADOS não têm piso (decisão do operador, 2026-06-27); lá o único critério é a margem ≥30%.
 - **Só Near Mint** — condição por match EXATO `== "NM"`, nunca substring (já vazou SP).
 - **Nunca inventar preço** — fonte falhou → marca fallback/erro e segue; jamais fabrica número.
@@ -105,14 +105,7 @@ margem = (preço de referência TCG − preço no site) ÷ preço TCG
 > conferir a margem da planilha contra o que vê no site, sem ter que "desfazer"
 > a taxa de cabeça.
 
-> ⚠️ **Base do denominador (divergência conhecida com a frota):** a fórmula
-> genérica do bloco da frota divide pelo preço de **compra**; **este scanner
-> divide pelo preço de REVENDA (TCG)** — confirmado no código:
-> `margin = (tcg_brl - custo_brl) / tcg_brl` (`cardtrader_scanner.py`). É a
-> mesma divergência já reconhecida no scanner integrado (que recalcula tudo na
-> base compra ao unificar as fontes). **Não "corrija" a fórmula daqui** sem
-> decisão explícita do operador — a base revenda dá um número menor ou igual,
-> então nenhum deal aprovado aqui viraria reprovado na base da frota.
+> ℹ️ **Base do denominador:** a margem deste scanner também é sobre a VENDA (`margin = (tcg_brl - custo_brl) / tcg_brl`, `cardtrader_scanner.py`), igual à regra da frota acima.
 
 > **Detalhe técnico (pode pular):** o primeiro rastreio usa um preço "cru"
 > (*per-expansion*, agregado por coleção); a conferência (`--validate-top`)
@@ -528,7 +521,10 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
   **match único obrigatório e só blueprint SEM versão** (variante Gold/Alt Art
   nunca entra) — rotulado por linha na coluna `join` do CSV. O que sobrar fica
   **FORA com contagem explícita** — nunca fuzzy por nome, nunca preço inventado.
-- **Convenções:** margem BRUTA base compra `(TCG_BRL − CT_BRL)/CT_BRL`;
+- **Convenções:** a **margem sobre a VENDA** `(TCG_BRL − CT_BRL)/TCG_BRL` decide
+  o corte (`--threshold` 0.30); o **ROI** `(TCG_BRL − CT_BRL)/CT_BRL` é só
+  informativo (coluna "ROI aquisição %", não filtra nem ordena). Ct ou tcg ≤ 0
+  → linha fora, contada em "sem preço válido" e avisada no stderr.
   `--threshold` em **FRAÇÃO** (0.30; passar `30` aborta com erro); piso de
   relevância na referência (`--min-price-usd 10`); NM por match **EXATO**
   `== "Near Mint"`; graded/assinada nunca entram; oferta <50% da referência vai
