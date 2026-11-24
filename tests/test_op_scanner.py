@@ -174,7 +174,7 @@ def test_ref_volatil_rebaixa_compra_para_revisar():
 def test_ref_estavel_continua_compra_limpa():
     tcg_index = {454591: {"name": "x", "url": "https://www.tcgplayer.com/product/454591/x",
                           "prices": {"Foil": 74.0}, "lows": {"Foil": 62.89}}}
-    offers = {244442: [make_offer(cents=26871)]}  # R$268,71 → ~37.7% com BRL=5
+    offers = {244442: [make_offer(cents=25800)]}  # R$258,00 → venda ~30.3% com BRL=5 (TCG R$370)
     rows, stats, _ = build_rows(EXP, [_bp()], offers, tcg_index, RATES, 10.0)
     assert rows[0]["ref_volatil"] is False
     md = build_markdown(rows, stats, {"data": "t", "expansoes": "op01", "fx": 5.0,
@@ -228,7 +228,8 @@ def test_build_rows_join_por_tcg_player_id_e_margem_base_compra():
     assert stats["avaliadas"] == 1
     row = rows[0]
     assert row["tcg_usd"] == 74.0 and row["ct_brl"] == 200.0
-    assert row["margem"] == pytest.approx((74.0 * 5.0 - 200.0) / 200.0)
+    assert row["margem"] == pytest.approx((74.0 * 5.0 - 200.0) / (74.0 * 5.0))  # venda
+    assert row["roi"] == pytest.approx((74.0 * 5.0 - 200.0) / 200.0)
     assert row["oferta_url"].endswith("/cards/244442")
     assert row["raridade"] == "Common"  # de fixed_properties["onepiece_rarity"]
 
