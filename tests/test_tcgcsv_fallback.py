@@ -25,6 +25,7 @@ subtype, reintroduz a inflação Gengar $146→$1599 e quebra (c)).
 from __future__ import annotations
 
 import sys
+import zlib
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -37,7 +38,6 @@ from cardtrader_scanner import (  # noqa: E402
     Listing,
     TcgCsvFallbackProvider,
     resolve_tcgcsv_group_id,
-    select_tcgplayer_variant_price,
 )
 
 
@@ -138,6 +138,17 @@ def test_b_no_match_returns_none():
     assert gid is None, gid
 
 
+import ct_variants  # noqa: E402
+
+
+def select_tcgplayer_variant_price(prices, foil, is_holo, first_edition=False):
+    """Atalho de teste sobre ct_variants.match_reference_variant (B1: a escada antiga de
+    variante foi removida; a escolha é por correspondência EXATA de edição+acabamento)."""
+    offer = ct_variants.offer_variant(first_edition, bool(foil), is_holo)
+    m = ct_variants.match_reference_variant(prices, *offer)
+    return (m.key, prices[m.key]) if m.status == ct_variants.OK else (None, None)
+
+
 # ───────────────── (c) FIDELIDADE DE VARIANTE (a regressão Gengar) ───────────
 # Gengar: Holofoil $146.89 vs Reverse Holofoil $1599.99 (10×). Um listing
 # não-reverse de uma holo rare DEVE casar holofoil; um pokemon_reverse=True DEVE
@@ -236,10 +247,8 @@ def test_d_provider_skips_when_variant_missing():
 
 
 def test_d_never_substitutes_another_subtype():
-    """Carta base NÃO-holo, listing não-reverse: só Reverse Holofoil disponível.
-    A escada non-holo é [normal, holofoil, unlimitedHolofoil, reverseHolofoil] —
-    reverse é último recurso, mas existe. Provamos o caso onde nem isso há:
-    apenas um subtype 1stEdition (EXCLUÍDO) → None (não vaza 1st Ed inflado)."""
+    """B1: oferta Unlimited NÃO-holo com só chave 1stEditionHolofoil → None (correspondência
+    exata de edição E acabamento: 1st Ed nunca precifica Unlimited, nem holo uma normal)."""
     variant, entry = select_tcgplayer_variant_price(
         {"1stEditionHolofoil": {"market": 999.0}},
         foil=False, is_holo=False
@@ -251,8 +260,8 @@ def test_d_never_substitutes_another_subtype():
 def _listing(card_name, num, set_code="asc", foil=False, rarity="Common",
              price_brl=60.0):
     return Listing(
-        product_id=hash((card_name, num)) & 0xFFFF,
-        blueprint_id=hash((card_name, num, "bp")) & 0xFFFF,
+        product_id=zlib.crc32(repr((card_name, num)).encode()),
+        blueprint_id=zlib.crc32(repr((card_name, num, "bp")).encode()),
         card_name=card_name, set_code=set_code, set_name="Ascended Heroes",
         collector_number=num, condition="Near Mint", language="en",
         price_cents=int(price_brl * 100), price_currency="BRL",
@@ -306,7 +315,7 @@ def _scanner_with(pokemontcg_prices, tcgcsv_provider, listings,
     pricing.last_set_release_date = None
     pricing.last_price_source = None
 
-    def price_fn(card_name, set_code, num, foil=False, rarity=None):
+    def price_fn(card_name, set_code, num, foil=False, rarity=None, first_edition=False):
         return pokemontcg_prices.get((set_code, num))
     pricing.market_price_usd.side_effect = price_fn
     s.pricing = pricing
@@ -377,9 +386,11 @@ def test_a_pokemontcg_priced_set_never_invokes_tcgcsv():
     assert all((o.price_source or "pokemontcg") == "pokemontcg" for o in opps)
 
 
-def test_e_no_fallback_when_pokemontcg_has_any_hit():
-    """Cobertura PARCIAL: pokemontcg precifica 1 dos 2 cards → tcgcsv NÃO entra
-    (a regra é set_tcg_hits == 0, não 'completar buracos por-card')."""
+def test_e_fallback_consulted_for_misses_even_when_pokemontcg_has_hit():
+    """Lote 3 (decisão 3, substitui o antigo 'tcgcsv NÃO entra com hit prévio'):
+    pokemontcg precifica 1 dos 2 cards → o miss (Card B) É oferecido ao tcgcsv.
+    Aqui o tcgcsv também não tem a carta → B continua sem preço, NÃO some
+    (fica em unpriced_rows) e nada é rotulado como resgatado."""
     listings = [
         _listing("Card A", "001/100", set_code="dri", rarity="Holo Rare"),
         _listing("Card B", "002/100", set_code="dri", rarity="Holo Rare"),
@@ -390,10 +401,11 @@ def test_e_no_fallback_when_pokemontcg_has_any_hit():
         tcgcsv, listings, max_misses=1,
     )
     opps = _run_scan_expansion(scanner, listings)
-    # só A vira opp; tcgcsv não roda (houve hit no set)
     assert [o.listing.card_name for o in opps] == ["Card A"]
-    tcgcsv.session.get.assert_not_called()
-    assert scanner.stats["tcgcsv_fallback_sets"] == 0
+    # miss do fim do set oferecido ao tcgcsv: /groups + /products + /prices
+    assert [c.args[0].rsplit("/", 1)[-1] for c in tcgcsv.session.get.call_args_list]         == ["groups", "products", "prices"]
+    assert scanner.stats["tcgcsv_fallback_sets"] == 0  # nada resgatado
+    assert [(r["card"], r["reason"]) for r in scanner.unpriced_rows]         == [("Card B", "sem_referencia_na_fonte")]
 
 
 def test_a_opt_out_disables_fallback():
@@ -439,7 +451,7 @@ def test_f_validate_per_blueprint_overrides_tcgcsv_margin():
     # per-blueprint devolve o mesmo seller, NM, não-reverse, a R$63 (markup +5%)
     s.ct.list_listings_by_blueprint = MagicMock(return_value=[{
         "user": {"username": "seller1"},
-        "price_cents": 6300, "price_currency": "BRL",
+        "price_cents": 6300, "price_currency": "BRL", "graded": False,
         "properties_hash": {"condition": "Near Mint",
                             "pokemon_reverse": False, "pokemon_language": "en"},
     }])

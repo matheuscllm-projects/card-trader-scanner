@@ -106,6 +106,9 @@ def test_classify_plain_card_unaffected():
         "net_margin": 0.35,
         "lucro_liq": 140.0,
         "validation_status": "VALIDATED_REAL",
+        "ref_compativel": "Sim", "ref_age_dias": 0.0, "pc_status": "OK", "pc_vendas_30d": 2, "pc_vendas_90d": 7,
+        "pc_truncado": False, "compra_inclui_hub": True,
+        "reference_price_usd": 100.0, "pc_median_usd": 100.0,
     }
     decision, _ = pp.classify_decision(row, cfg)
     assert decision == "COMPRA"

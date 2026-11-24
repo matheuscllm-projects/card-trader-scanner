@@ -1,0 +1,71 @@
+{
+ "wiz": [
+  {
+   "gid": 1418,
+   "pid": 87394,
+   "name": "Mew (8)",
+   "number": "08/53",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Normal",
+     11.9
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 87395,
+   "name": "Mew (9)",
+   "number": "09/53",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Holofoil",
+     154.19
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 89353,
+   "name": "Smeargle",
+   "number": "32/53",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Normal",
+     19.08
+    ]
+   ]
+  }
+ ],
+ "xybsp": [
+  {
+   "gid": 1451,
+   "pid": 84270,
+   "name": "Chespin - XY01",
+   "number": "XY01",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Holofoil",
+     7.94
+    ]
+   ]
+  },
+  {
+   "gid": 1451,
+   "pid": 85410,
+   "name": "Fennekin",
+   "number": "XY02",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Holofoil",
+     12.9
+    ]
+   ]
+  }
+ ]
+}

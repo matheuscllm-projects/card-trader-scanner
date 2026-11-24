@@ -1,0 +1,126 @@
+{
+ "_note": "GET /marketplace/products?blueprint_id=117903&language=en (2026-11-24, resposta REAL gravada; uf Typhlosion 017). O campo de preço é price:{cents,currency}; NÃO existe price_cents no topo.",
+ "blueprint_id": 117903,
+ "listings": [
+  {
+   "id": 461016134,
+   "blueprint_id": 117903,
+   "name_en": "Typhlosion",
+   "expansion": {
+    "id": 1507,
+    "code": "uf",
+    "name_en": "EX Unseen Forces"
+   },
+   "quantity": 1,
+   "description": "non holo",
+   "properties_hash": {
+    "condition": "Near Mint",
+    "signed": false,
+    "altered": false,
+    "collector_number": "017",
+    "first_edition": false,
+    "pokemon_rarity": "Holo Rare",
+    "pokemon_language": "en",
+    "pokemon_attack": "Flickering Flames | Rage",
+    "tournament_legal": true,
+    "pokemon_reverse": false
+   },
+   "graded": false,
+   "user": {
+    "can_sell_sealed_with_ct_zero": true,
+    "max_sellable_in24h_quantity": null,
+    "country_code": "IT",
+    "too_many_request_for_cancel_as_seller": false,
+    "user_type": "pro",
+    "one_day_ready": false,
+    "id": 164440,
+    "username": "PokePosta-Store",
+    "can_sell_via_hub": true
+   },
+   "price": {
+    "cents": 34536,
+    "currency": "BRL"
+   }
+  },
+  {
+   "id": 472141106,
+   "blueprint_id": 117903,
+   "name_en": "Typhlosion",
+   "expansion": {
+    "id": 1507,
+    "code": "uf",
+    "name_en": "EX Unseen Forces"
+   },
+   "quantity": 1,
+   "description": "17/115",
+   "properties_hash": {
+    "condition": "Near Mint",
+    "signed": false,
+    "altered": false,
+    "collector_number": "017",
+    "first_edition": false,
+    "pokemon_rarity": "Holo Rare",
+    "pokemon_language": "en",
+    "pokemon_attack": "Flickering Flames | Rage",
+    "tournament_legal": true,
+    "pokemon_reverse": false
+   },
+   "graded": false,
+   "user": {
+    "id": 469230,
+    "username": "Derek Lankford",
+    "user_type": "normal",
+    "country_code": "US",
+    "max_sellable_in24h_quantity": null,
+    "one_day_ready": false,
+    "too_many_request_for_cancel_as_seller": false,
+    "can_sell_via_hub": false,
+    "can_sell_sealed_with_ct_zero": false
+   },
+   "price": {
+    "cents": 900912,
+    "currency": "BRL"
+   }
+  },
+  {
+   "id": 470145371,
+   "blueprint_id": 117903,
+   "name_en": "Typhlosion",
+   "expansion": {
+    "id": 1507,
+    "code": "uf",
+    "name_en": "EX Unseen Forces"
+   },
+   "quantity": 1,
+   "description": "non holo",
+   "properties_hash": {
+    "condition": "Poor",
+    "signed": false,
+    "altered": false,
+    "collector_number": "017",
+    "first_edition": false,
+    "pokemon_rarity": "Holo Rare",
+    "pokemon_language": "en",
+    "pokemon_attack": "Flickering Flames | Rage",
+    "tournament_legal": true,
+    "pokemon_reverse": false
+   },
+   "graded": false,
+   "user": {
+    "id": 49706,
+    "username": "LevelUp WeHaveFun",
+    "user_type": "pro",
+    "country_code": "IT",
+    "max_sellable_in24h_quantity": null,
+    "one_day_ready": false,
+    "too_many_request_for_cancel_as_seller": false,
+    "can_sell_via_hub": true,
+    "can_sell_sealed_with_ct_zero": true
+   },
+   "price": {
+    "cents": 5195,
+    "currency": "BRL"
+   }
+  }
+ ]
+}

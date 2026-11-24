@@ -79,11 +79,11 @@ def test_tcgcsv_constructs_with_cache_only():
 
 
 # ───────────────────────── (2) default INALTERADO ─────────────────────────
-def test_default_provider_still_pokemontcg():
-    """Sem flag, --provider segue pokemontcg (comandos canônicos intactos)."""
+def test_default_provider_is_tcgcsv_since_b1j():
+    """B1j (decisão do dono 2026-11-24): sem flag, a fonte principal é o tcgcsv; pokemontcg.io = 2ª fonte."""
     with patch.object(sys, "argv", ["cardtrader_scanner.py"]):
         args = sc.parse_args()
-    assert args.provider == "pokemontcg", args.provider
+    assert args.provider == "tcgcsv", args.provider
 
 
 def test_provider_tcgcsv_is_accepted_by_cli():
@@ -109,8 +109,8 @@ def test_primary_tcgcsv_prefills_and_prices_whole_set():
     assert len(opps) == 2, [o.listing.card_name for o in opps]
     assert all(o.price_source == "tcgcsv" for o in opps), \
         [o.price_source for o in opps]
-    # prefill aconteceu (groups + products + prices = 3 GETs, 1× por set)
-    assert tcgcsv.session.get.call_count == 3, tcgcsv.session.get.call_count
+    # prefill aconteceu (groups + products + prices + last-updated do dump = 4 GETs, 1× por set)
+    assert tcgcsv.session.get.call_count == 4, tcgcsv.session.get.call_count
     # papel primário NÃO é fallback: contadores de resgate intactos
     assert scanner.stats["tcgcsv_fallback_sets"] == 0
     assert scanner.stats["tcgcsv_fallback_priced"] == 0

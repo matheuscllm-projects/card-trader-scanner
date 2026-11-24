@@ -1,0 +1,1045 @@
+{
+ "_source": "tcgcsv.com/tcgplayer/3/{groupId}/products+prices, coletado 2026-11-24; 149 grupos de Pokemon TCG (1999+, sem promos/decks/kits/POP/McDonald's/Miscellaneous) listados em groups_used",
+ "_classes": "holo_only = entre as chaves nao-reverse so ha holofoil (rotulado ou nao); normal_present = ha chave normal; reverse_only = so reverse; tagged_* = produto com '(... Metal Card|Exclusive)' no nome, fora da contagem de excecao",
+ "_sv_start": "2023-03-31",
+ "rarities": {
+  "Common": {
+   "SV+": {
+    "normal_present": 1455,
+    "holo_only": 301,
+    "reverse_only": 156
+   },
+   "all": {
+    "normal_present": 5418,
+    "holo_only": 321,
+    "reverse_only": 159
+   },
+   "pre": {
+    "normal_present": 3963,
+    "reverse_only": 3,
+    "holo_only": 20
+   }
+  },
+  "Uncommon": {
+   "SV+": {
+    "normal_present": 1027,
+    "reverse_only": 82,
+    "holo_only": 156
+   },
+   "all": {
+    "normal_present": 4872,
+    "reverse_only": 82,
+    "holo_only": 177
+   },
+   "pre": {
+    "normal_present": 3845,
+    "holo_only": 21
+   }
+  },
+  "Double Rare": {
+   "SV+": {
+    "holo_only": 339,
+    "tagged_normal_present": 1
+   },
+   "all": {
+    "holo_only": 339,
+    "tagged_normal_present": 1
+   }
+  },
+  "Rare": {
+   "SV+": {
+    "holo_only": 458,
+    "reverse_only": 50
+   },
+   "all": {
+    "holo_only": 470,
+    "reverse_only": 51,
+    "normal_present": 2101
+   },
+   "pre": {
+    "normal_present": 2101,
+    "holo_only": 12,
+    "reverse_only": 1
+   }
+  },
+  "Illustration Rare": {
+   "SV+": {
+    "holo_only": 525
+   },
+   "all": {
+    "holo_only": 525
+   }
+  },
+  "Ultra Rare": {
+   "SV+": {
+    "holo_only": 373
+   },
+   "all": {
+    "holo_only": 2228,
+    "reverse_only": 6,
+    "normal_present": 10
+   },
+   "pre": {
+    "holo_only": 1855,
+    "reverse_only": 6,
+    "normal_present": 10
+   }
+  },
+  "Special Illustration Rare": {
+   "SV+": {
+    "holo_only": 238
+   },
+   "all": {
+    "holo_only": 238
+   }
+  },
+  "Mega Hyper Rare": {
+   "SV+": {
+    "holo_only": 9
+   },
+   "all": {
+    "holo_only": 9
+   }
+  },
+  "Pikachu Rare": {
+   "SV+": {
+    "holo_only": 30
+   },
+   "all": {
+    "holo_only": 30
+   }
+  },
+  "Futuristic Rare": {
+   "SV+": {
+    "holo_only": 2
+   },
+   "all": {
+    "holo_only": 2
+   }
+  },
+  "RGB Rare": {
+   "SV+": {
+    "holo_only": 3
+   },
+   "all": {
+    "holo_only": 3
+   }
+  },
+  "Classic Collection": {
+   "SV+": {
+    "holo_only": 30
+   },
+   "all": {
+    "holo_only": 55
+   },
+   "pre": {
+    "holo_only": 25
+   }
+  },
+  "Mega Attack Rare": {
+   "SV+": {
+    "holo_only": 7
+   },
+   "all": {
+    "holo_only": 7
+   }
+  },
+  "Black White Rare": {
+   "SV+": {
+    "holo_only": 4
+   },
+   "all": {
+    "holo_only": 4
+   }
+  },
+  "Hyper Rare": {
+   "SV+": {
+    "holo_only": 74
+   },
+   "all": {
+    "holo_only": 74
+   }
+  },
+  "ACE SPEC Rare": {
+   "SV+": {
+    "holo_only": 33
+   },
+   "all": {
+    "holo_only": 33
+   }
+  },
+  "Shiny Rare": {
+   "SV+": {
+    "holo_only": 120
+   },
+   "all": {
+    "holo_only": 120
+   }
+  },
+  "Shiny Ultra Rare": {
+   "SV+": {
+    "holo_only": 12
+   },
+   "all": {
+    "holo_only": 12
+   }
+  },
+  "Radiant Rare": {
+   "pre": {
+    "holo_only": 15
+   },
+   "all": {
+    "holo_only": 15
+   }
+  },
+  "Holo Rare": {
+   "pre": {
+    "holo_only": 1616,
+    "normal_present": 44
+   },
+   "all": {
+    "holo_only": 1616,
+    "normal_present": 44
+   }
+  },
+  "Secret Rare": {
+   "pre": {
+    "holo_only": 587,
+    "normal_present": 6,
+    "reverse_only": 6
+   },
+   "all": {
+    "holo_only": 587,
+    "normal_present": 6,
+    "reverse_only": 6
+   }
+  },
+  "Amazing Rare": {
+   "pre": {
+    "holo_only": 9
+   },
+   "all": {
+    "holo_only": 9
+   }
+  },
+  "Shiny Holo Rare": {
+   "pre": {
+    "holo_only": 234,
+    "reverse_only": 12
+   },
+   "all": {
+    "holo_only": 234,
+    "reverse_only": 12
+   }
+  },
+  "Rainbow Rare": {
+   "pre": {
+    "holo_only": 36
+   },
+   "all": {
+    "holo_only": 36
+   }
+  },
+  "Prism Rare": {
+   "pre": {
+    "holo_only": 27
+   },
+   "all": {
+    "holo_only": 27
+   }
+  },
+  "Rare BREAK": {
+   "pre": {
+    "holo_only": 26
+   },
+   "all": {
+    "holo_only": 26
+   }
+  },
+  "Promo": {
+   "pre": {
+    "holo_only": 3,
+    "normal_present": 23,
+    "reverse_only": 6
+   },
+   "all": {
+    "holo_only": 3,
+    "normal_present": 47,
+    "reverse_only": 6
+   },
+   "SV+": {
+    "normal_present": 24
+   }
+  },
+  "Rare Ace": {
+   "pre": {
+    "holo_only": 13
+   },
+   "all": {
+    "holo_only": 13
+   }
+  }
+ },
+ "groups_used": [
+  [
+   24955,
+   "ME07: Flowing Fists",
+   "2027-02-06"
+  ],
+  [
+   24831,
+   "ME06: Delta Reign",
+   "2026-11-06"
+  ],
+  [
+   24722,
+   "ME: 30th Celebration",
+   "2026-09-16"
+  ],
+  [
+   24837,
+   "ME: 30th Celebration Classic Collection",
+   "2026-09-16"
+  ],
+  [
+   24688,
+   "ME05: Pitch Black",
+   "2026-07-17"
+  ],
+  [
+   24655,
+   "ME04: Chaos Rising",
+   "2026-05-22"
+  ],
+  [
+   24587,
+   "ME03: Perfect Order",
+   "2026-03-27"
+  ],
+  [
+   24541,
+   "ME: Ascended Heroes",
+   "2026-01-30"
+  ],
+  [
+   24448,
+   "ME02: Phantasmal Flames",
+   "2025-11-14"
+  ],
+  [
+   24380,
+   "ME01: Mega Evolution",
+   "2025-09-26"
+  ],
+  [
+   24325,
+   "SV: Black Bolt",
+   "2025-07-18"
+  ],
+  [
+   24326,
+   "SV: White Flare",
+   "2025-07-18"
+  ],
+  [
+   24269,
+   "SV10: Destined Rivals",
+   "2025-05-30"
+  ],
+  [
+   24073,
+   "SV09: Journey Together",
+   "2025-03-28"
+  ],
+  [
+   23821,
+   "SV: Prismatic Evolutions",
+   "2025-01-17"
+  ],
+  [
+   23651,
+   "SV08: Surging Sparks",
+   "2024-11-08"
+  ],
+  [
+   23537,
+   "SV07: Stellar Crown",
+   "2024-09-13"
+  ],
+  [
+   23529,
+   "SV: Shrouded Fable",
+   "2024-08-02"
+  ],
+  [
+   23473,
+   "SV06: Twilight Masquerade",
+   "2024-05-24"
+  ],
+  [
+   23381,
+   "SV05: Temporal Forces",
+   "2024-03-22"
+  ],
+  [
+   23353,
+   "SV: Paldean Fates",
+   "2024-01-26"
+  ],
+  [
+   23286,
+   "SV04: Paradox Rift",
+   "2023-11-03"
+  ],
+  [
+   23237,
+   "SV: Scarlet & Violet 151",
+   "2023-09-22"
+  ],
+  [
+   23228,
+   "SV03: Obsidian Flames",
+   "2023-08-11"
+  ],
+  [
+   23120,
+   "SV02: Paldea Evolved",
+   "2023-06-09"
+  ],
+  [
+   22873,
+   "SV01: Scarlet & Violet Base Set",
+   "2023-03-31"
+  ],
+  [
+   17688,
+   "SWSH: Crown Zenith",
+   "2023-01-20"
+  ],
+  [
+   17689,
+   "SWSH: Crown Zenith: Galarian Gallery",
+   "2023-01-20"
+  ],
+  [
+   3170,
+   "SWSH12: Silver Tempest",
+   "2022-11-11"
+  ],
+  [
+   17674,
+   "SWSH12: Silver Tempest Trainer Gallery",
+   "2022-11-11"
+  ],
+  [
+   3118,
+   "SWSH11: Lost Origin",
+   "2022-09-09"
+  ],
+  [
+   3172,
+   "SWSH11: Lost Origin Trainer Gallery",
+   "2022-09-09"
+  ],
+  [
+   3064,
+   "Pokemon GO",
+   "2022-07-01"
+  ],
+  [
+   3040,
+   "SWSH10: Astral Radiance",
+   "2022-05-27"
+  ],
+  [
+   3068,
+   "SWSH10: Astral Radiance Trainer Gallery",
+   "2022-05-27"
+  ],
+  [
+   2948,
+   "SWSH09: Brilliant Stars",
+   "2022-02-25"
+  ],
+  [
+   3020,
+   "SWSH09: Brilliant Stars Trainer Gallery",
+   "2022-02-25"
+  ],
+  [
+   2906,
+   "SWSH08: Fusion Strike",
+   "2021-11-12"
+  ],
+  [
+   2867,
+   "Celebrations",
+   "2021-10-08"
+  ],
+  [
+   2931,
+   "Celebrations: Classic Collection",
+   "2021-10-08"
+  ],
+  [
+   2848,
+   "SWSH07: Evolving Skies",
+   "2021-08-27"
+  ],
+  [
+   2807,
+   "SWSH06: Chilling Reign",
+   "2021-06-18"
+  ],
+  [
+   2765,
+   "SWSH05: Battle Styles",
+   "2021-03-19"
+  ],
+  [
+   2754,
+   "Shining Fates",
+   "2021-02-19"
+  ],
+  [
+   2781,
+   "Shining Fates: Shiny Vault",
+   "2021-02-19"
+  ],
+  [
+   2701,
+   "SWSH04: Vivid Voltage",
+   "2020-11-13"
+  ],
+  [
+   2685,
+   "Champion's Path",
+   "2020-09-25"
+  ],
+  [
+   2675,
+   "SWSH03: Darkness Ablaze",
+   "2020-08-14"
+  ],
+  [
+   2626,
+   "SWSH02: Rebel Clash",
+   "2020-05-01"
+  ],
+  [
+   2585,
+   "SWSH01: Sword & Shield Base Set",
+   "2020-02-07"
+  ],
+  [
+   2534,
+   "SM - Cosmic Eclipse",
+   "2019-11-01"
+  ],
+  [
+   2480,
+   "Hidden Fates",
+   "2019-08-23"
+  ],
+  [
+   2594,
+   "Hidden Fates: Shiny Vault",
+   "2019-08-23"
+  ],
+  [
+   2464,
+   "SM - Unified Minds",
+   "2019-08-02"
+  ],
+  [
+   2420,
+   "SM - Unbroken Bonds",
+   "2019-05-03"
+  ],
+  [
+   2409,
+   "Detective Pikachu",
+   "2019-04-05"
+  ],
+  [
+   2377,
+   "SM - Team Up",
+   "2019-02-01"
+  ],
+  [
+   2328,
+   "SM - Lost Thunder",
+   "2018-11-02"
+  ],
+  [
+   2295,
+   "Dragon Majesty",
+   "2018-09-07"
+  ],
+  [
+   2278,
+   "SM - Celestial Storm",
+   "2018-08-03"
+  ],
+  [
+   2209,
+   "SM - Forbidden Light",
+   "2018-05-04"
+  ],
+  [
+   2178,
+   "SM - Ultra Prism",
+   "2018-02-02"
+  ],
+  [
+   2071,
+   "SM - Crimson Invasion",
+   "2017-11-03"
+  ],
+  [
+   2054,
+   "Shining Legends",
+   "2017-10-06"
+  ],
+  [
+   1957,
+   "SM - Burning Shadows",
+   "2017-08-04"
+  ],
+  [
+   1919,
+   "SM - Guardians Rising",
+   "2017-05-05"
+  ],
+  [
+   1863,
+   "SM Base Set",
+   "2017-02-03"
+  ],
+  [
+   1842,
+   "XY - Evolutions",
+   "2016-11-02"
+  ],
+  [
+   1815,
+   "XY - Steam Siege",
+   "2016-08-03"
+  ],
+  [
+   1780,
+   "XY - Fates Collide",
+   "2016-05-02"
+  ],
+  [
+   1728,
+   "Generations",
+   "2016-02-22"
+  ],
+  [
+   1729,
+   "Generations: Radiant Collection",
+   "2016-02-22"
+  ],
+  [
+   1701,
+   "XY - BREAKpoint",
+   "2016-02-03"
+  ],
+  [
+   1661,
+   "XY - BREAKthrough",
+   "2015-11-04"
+  ],
+  [
+   1576,
+   "XY - Ancient Origins",
+   "2015-08-12"
+  ],
+  [
+   1534,
+   "XY - Roaring Skies",
+   "2015-05-06"
+  ],
+  [
+   1525,
+   "Double Crisis",
+   "2015-03-25"
+  ],
+  [
+   1509,
+   "XY - Primal Clash",
+   "2015-02-04"
+  ],
+  [
+   1494,
+   "XY - Phantom Forces",
+   "2014-11-05"
+  ],
+  [
+   1481,
+   "XY - Furious Fists",
+   "2014-08-13"
+  ],
+  [
+   1464,
+   "XY - Flashfire",
+   "2014-05-07"
+  ],
+  [
+   1387,
+   "XY Base Set",
+   "2014-02-05"
+  ],
+  [
+   1522,
+   "Kalos Starter Set",
+   "2013-11-08"
+  ],
+  [
+   1409,
+   "Legendary Treasures",
+   "2013-11-06"
+  ],
+  [
+   1465,
+   "Legendary Treasures: Radiant Collection",
+   "2013-11-06"
+  ],
+  [
+   1370,
+   "Plasma Blast",
+   "2013-08-14"
+  ],
+  [
+   1382,
+   "Plasma Freeze",
+   "2013-05-08"
+  ],
+  [
+   1413,
+   "Plasma Storm",
+   "2013-02-06"
+  ],
+  [
+   1408,
+   "Boundaries Crossed",
+   "2012-11-07"
+  ],
+  [
+   1426,
+   "Dragon Vault",
+   "2012-10-05"
+  ],
+  [
+   1394,
+   "Dragons Exalted",
+   "2012-08-15"
+  ],
+  [
+   1386,
+   "Dark Explorers",
+   "2012-05-09"
+  ],
+  [
+   1412,
+   "Next Destinies",
+   "2012-02-08"
+  ],
+  [
+   1385,
+   "Noble Victories",
+   "2011-11-16"
+  ],
+  [
+   1424,
+   "Emerging Powers",
+   "2011-08-31"
+  ],
+  [
+   1400,
+   "Black and White",
+   "2011-04-25"
+  ],
+  [
+   1415,
+   "Call of Legends",
+   "2011-02-09"
+  ],
+  [
+   1381,
+   "Triumphant",
+   "2010-11-03"
+  ],
+  [
+   1403,
+   "Undaunted",
+   "2010-08-18"
+  ],
+  [
+   1399,
+   "Unleashed",
+   "2010-05-12"
+  ],
+  [
+   1402,
+   "HeartGold SoulSilver",
+   "2010-02-10"
+  ],
+  [
+   1433,
+   "Rumble",
+   "2009-11-16"
+  ],
+  [
+   1391,
+   "Arceus",
+   "2009-11-04"
+  ],
+  [
+   1384,
+   "Supreme Victors",
+   "2009-08-19"
+  ],
+  [
+   1367,
+   "Rising Rivals",
+   "2009-05-16"
+  ],
+  [
+   1406,
+   "Platinum",
+   "2009-02-11"
+  ],
+  [
+   1369,
+   "Stormfront",
+   "2008-11-05"
+  ],
+  [
+   1417,
+   "Legends Awakened",
+   "2008-08-20"
+  ],
+  [
+   1390,
+   "Majestic Dawn",
+   "2008-05-21"
+  ],
+  [
+   1405,
+   "Great Encounters",
+   "2008-02-13"
+  ],
+  [
+   1380,
+   "Secret Wonders",
+   "2007-11-07"
+  ],
+  [
+   1368,
+   "Mysterious Treasures",
+   "2007-08-22"
+  ],
+  [
+   1430,
+   "Diamond and Pearl",
+   "2007-05-23"
+  ],
+  [
+   1383,
+   "EX Power Keepers",
+   "2007-02-01"
+  ],
+  [
+   1411,
+   "EX Dragon Frontiers",
+   "2006-11-08"
+  ],
+  [
+   1395,
+   "EX Crystal Guardians",
+   "2006-08-30"
+  ],
+  [
+   1379,
+   "EX Holon Phantoms",
+   "2006-05-03"
+  ],
+  [
+   1378,
+   "EX Legend Maker",
+   "2006-02-13"
+  ],
+  [
+   1429,
+   "EX Delta Species",
+   "2005-10-31"
+  ],
+  [
+   1398,
+   "EX Unseen Forces",
+   "2005-08-22"
+  ],
+  [
+   1410,
+   "EX Emerald",
+   "2005-05-09"
+  ],
+  [
+   1404,
+   "EX Deoxys",
+   "2005-02-14"
+  ],
+  [
+   1428,
+   "EX Team Rocket Returns",
+   "2004-11-01"
+  ],
+  [
+   1853,
+   "EX Battle Stadium",
+   "2004-10-18"
+  ],
+  [
+   1419,
+   "EX FireRed & LeafGreen",
+   "2004-08-30"
+  ],
+  [
+   1416,
+   "EX Hidden Legends",
+   "2004-06-14"
+  ],
+  [
+   1377,
+   "EX Team Magma vs Team Aqua",
+   "2004-03-15"
+  ],
+  [
+   1376,
+   "EX Dragon",
+   "2003-11-24"
+  ],
+  [
+   1392,
+   "EX Sandstorm",
+   "2003-09-18"
+  ],
+  [
+   1393,
+   "EX Ruby and Sapphire",
+   "2003-06-18"
+  ],
+  [
+   1372,
+   "Skyridge",
+   "2003-05-12"
+  ],
+  [
+   1397,
+   "Aquapolis",
+   "2003-01-15"
+  ],
+  [
+   1375,
+   "Expedition",
+   "2002-09-15"
+  ],
+  [
+   24493,
+   "e-Reader Sample Cards",
+   "2002-08-02"
+  ],
+  [
+   1374,
+   "Legendary Collection",
+   "2002-05-24"
+  ],
+  [
+   1444,
+   "Neo Destiny",
+   "2002-02-28"
+  ],
+  [
+   1389,
+   "Neo Revelation",
+   "2001-09-21"
+  ],
+  [
+   648,
+   "Southern Islands",
+   "2001-07-31"
+  ],
+  [
+   1434,
+   "Neo Discovery",
+   "2001-06-01"
+  ],
+  [
+   1396,
+   "Neo Genesis",
+   "2000-12-16"
+  ],
+  [
+   1440,
+   "Gym Challenge",
+   "2000-10-16"
+  ],
+  [
+   1441,
+   "Gym Heroes",
+   "2000-10-14"
+  ],
+  [
+   1373,
+   "Team Rocket",
+   "2000-04-24"
+  ],
+  [
+   605,
+   "Base Set 2",
+   "2000-02-24"
+  ],
+  [
+   630,
+   "Fossil",
+   "1999-10-10"
+  ],
+  [
+   635,
+   "Jungle",
+   "1999-06-16"
+  ],
+  [
+   604,
+   "Base Set",
+   "1999-01-09"
+  ],
+  [
+   1663,
+   "Base Set (Shadowless)",
+   "1999-01-09"
+  ],
+  [
+   2776,
+   "First Partner Pack",
+   "2026-11-23"
+  ]
+ ],
+ "gated_from_date": {
+  "Ultra Rare": {
+   "holo_only": 2159,
+   "reverse_only": 6,
+   "from": "2005-05-10"
+  },
+  "Secret Rare": {
+   "holo_only": 492,
+   "from": "2008-11-05",
+   "exception_sets": [
+    "evo"
+   ],
+   "_b1f": "corte antecipado de 2016-11-03 p/ 2008-11-05: 0 exceção em 43 groups (b1f_secret_evidence.json); XY Evolutions é exceção por set"
+  }
+ }
+}

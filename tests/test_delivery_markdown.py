@@ -20,6 +20,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pandas as pd
 import cardtrader_postprocess as pp
+from pc_liquid import with_liquidity
 
 
 def _raw_df():
@@ -52,14 +53,14 @@ def _raw_df():
 
 def _enriched(cfg=None):
     cfg = cfg or pp.DecisionConfig()
-    return pp.enrich_df(_raw_df(), hub_fee_rate=cfg.hub_fee_rate), cfg
+    return pp.enrich_df(_raw_df(), hub_fee_rate=cfg.hub_fee_rate).assign(ref_age_dias=0.0), cfg
 
 
 def test_header_exact():
     df, cfg = _enriched()
     md = pp.build_delivery_markdown(df, cfg, fx_usd_brl=5.0)
-    expected = ("| # | Margem % | CT US$ | TCG US$ | Dif | Carta | Set | "
-                "Raridade | Cond | Qtd | Flag | Links |")
+    expected = ("| # | Margem % | CT US$ | TCG US$ | Dif | Carta | Edição | Acabamento | Set | "
+                "Raridade | Cond | Qtd | Vendas 30d | Vendas 90d | Fonte ref. | Data ref. | Flag | Links |")
     assert expected in md
 
 
@@ -124,7 +125,7 @@ def test_pipe_in_text_does_not_break_table():
     # pipe escapado vira '/', cabeçalho continua com 12 colunas
     data_rows = [ln for ln in md.splitlines() if ln.startswith("| 1 |")]
     assert data_rows
-    assert data_rows[0].count("|") == 13  # 12 colunas → 13 pipes
+    assert data_rows[0].count("|") == 19  # 18 colunas (B1b: +Edição/Acabamento/Fonte/Data) → 19 pipes
 
 
 def test_flag_marks_revisar_as_validar_manual():
@@ -136,7 +137,7 @@ def test_flag_marks_revisar_as_validar_manual():
     # (240−187)/240 ≈ 22% (entre revisar_min 20% e min_net 25% default) → REVISAR.
     raw.loc[0, "LIVE R$ (real)"] = 187.0
     raw.loc[0, "TCG Market (BRL)"] = 240.0
-    df = pp.enrich_df(raw, hub_fee_rate=0.0)
+    df = with_liquidity(pp.enrich_df(raw, hub_fee_rate=0.0).assign(ref_age_dias=0.0))
     md = pp.build_delivery_markdown(df, pp.DecisionConfig(), fx_usd_brl=5.0)
     # a linha do Plusle (REVISAR) deve trazer o flag de cautela
     plusle_line = [ln for ln in md.splitlines() if "Plusle" in ln][0]
@@ -188,8 +189,7 @@ def test_near_miss_row_surfaces_with_lowered_thresholds():
     # lucro_liq preenchido pelo recompute (tcg − live), não mais NaN
     assert not pd.isna(df["lucro_liq"].iloc[0])
     cfg = pp.DecisionConfig(min_net_margin=0.20, min_lucro_liq=0,
-                            revisar_min_net=0.10,
-                            revisar_chase_modest_min_net=0.10)
+                            revisar_min_net=0.10)
     decisao, porque = pp.classify_decision(df.iloc[0], cfg)
     assert decisao != "NAO", porque
     md = pp.build_delivery_markdown(df, cfg, fx_usd_brl=5.1962)

@@ -21,7 +21,7 @@ def _ws_from_df(df):
 def test_price_cells_get_hyperlinks():
     df = pd.DataFrame({
         "Carta": ["Plusle 193"],
-        "Preço CT (R$)": [178.62],
+        "Preço CT validado (R$)": [178.62],
         "TCG (R$)": [270.22],
         "Link CT": ["https://www.cardtrader.com/cards/265388"],
         "Link TCG": ["https://prices.pokemontcg.io/tcgplayer/sv4-193"],
@@ -29,7 +29,7 @@ def test_price_cells_get_hyperlinks():
     ws = _ws_from_df(df)
     pp.apply_card_hyperlinks(ws, df)
     cols = list(df.columns)
-    pc = ws.cell(row=2, column=cols.index("Preço CT (R$)") + 1)
+    pc = ws.cell(row=2, column=cols.index("Preço CT validado (R$)") + 1)
     tc = ws.cell(row=2, column=cols.index("TCG (R$)") + 1)
     assert pc.hyperlink and "cardtrader.com" in pc.hyperlink.target
     assert tc.hyperlink and "pokemontcg.io" in tc.hyperlink.target
@@ -38,7 +38,7 @@ def test_price_cells_get_hyperlinks():
 
 
 def test_no_link_cols_is_noop():
-    df = pd.DataFrame({"Preço CT (R$)": [10.0], "TCG (R$)": [20.0]})
+    df = pd.DataFrame({"Preço CT validado (R$)": [10.0], "TCG (R$)": [20.0]})
     ws = _ws_from_df(df)
     pp.apply_card_hyperlinks(ws, df)  # sem Link CT/TCG → não deve quebrar
     assert ws.cell(row=2, column=1).hyperlink is None

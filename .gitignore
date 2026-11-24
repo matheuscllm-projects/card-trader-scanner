@@ -98,3 +98,6 @@ scan-live/
 # Ad-hoc run output (deal/validation data — local only)
 runs/
 validate_*.py
+
+# Scan real com precos de mercado (DELIVERY_CHAT proibe publicar no GitHub)
+tests/fixtures/scan_full34.xlsx

@@ -1,0 +1,109 @@
+{
+ "_source": "tcgcsv.com, coletado 2026-11-24: https://tcgcsv.com/tcgplayer/3/{groupId}/products e /prices; groupId 1396 (Neo Genesis), 604 (Base Set), 23473. Recorte de 6 cartas; valores reconferidos contra a coleta de 2026-11-24 (todos batem).",
+ "cards": [
+  {
+   "groupId": 1396,
+   "productId": 85764,
+   "name": "Gligar",
+   "number": "059/111",
+   "rarity": "Common",
+   "prices": [
+    {
+     "subTypeName": "1st Edition",
+     "marketPrice": 1.94,
+     "lowPrice": 1.19
+    },
+    {
+     "subTypeName": "Unlimited",
+     "marketPrice": 0.75,
+     "lowPrice": 0.35
+    }
+   ]
+  },
+  {
+   "groupId": 1396,
+   "productId": 86903,
+   "name": "Lugia",
+   "number": "009/111",
+   "rarity": "Holo Rare",
+   "prices": [
+    {
+     "subTypeName": "1st Edition Holofoil",
+     "marketPrice": 1300.0,
+     "lowPrice": 1500.0
+    },
+    {
+     "subTypeName": "Unlimited Holofoil",
+     "marketPrice": 513.49,
+     "lowPrice": 289.01
+    }
+   ]
+  },
+  {
+   "groupId": 604,
+   "productId": 42346,
+   "name": "Alakazam",
+   "number": "001/102",
+   "rarity": "Holo Rare",
+   "prices": [
+    {
+     "subTypeName": "Holofoil",
+     "marketPrice": 76.39,
+     "lowPrice": 44.53
+    }
+   ]
+  },
+  {
+   "groupId": 604,
+   "productId": 42386,
+   "name": "Abra",
+   "number": "043/102",
+   "rarity": "Common",
+   "prices": [
+    {
+     "subTypeName": "Normal",
+     "marketPrice": 1.86,
+     "lowPrice": 0.15
+    }
+   ]
+  },
+  {
+   "groupId": 23473,
+   "productId": 550045,
+   "name": "Tangela",
+   "number": "001/167",
+   "rarity": "Common",
+   "prices": [
+    {
+     "subTypeName": "Reverse Holofoil",
+     "marketPrice": 0.22,
+     "lowPrice": 0.04
+    },
+    {
+     "subTypeName": "Normal",
+     "marketPrice": 0.15,
+     "lowPrice": 0.01
+    }
+   ]
+  },
+  {
+   "groupId": 23473,
+   "productId": 550063,
+   "name": "Iron Leaves",
+   "number": "019/167",
+   "rarity": "Rare",
+   "prices": [
+    {
+     "subTypeName": "Holofoil",
+     "marketPrice": 0.21,
+     "lowPrice": 0.02
+    },
+    {
+     "subTypeName": "Reverse Holofoil",
+     "marketPrice": 1.27,
+     "lowPrice": 0.07
+    }
+   ]
+  }
+ ]
+}

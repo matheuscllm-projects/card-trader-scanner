@@ -179,16 +179,16 @@ def test_ratio_column_off_by_default_header_unchanged():
     df, cfg = _enriched()
     md = pp.build_delivery_markdown(df, cfg, fx_usd_brl=5.0)
     assert "Razão" not in md
-    assert ("| # | Margem % | CT US$ | TCG US$ | Dif | Carta | Set | "
-            "Raridade | Cond | Qtd | Flag | Links |") in md
+    assert ("| # | Margem % | CT US$ | TCG US$ | Dif | Carta | Edição | Acabamento | Set | "
+            "Raridade | Cond | Qtd | Vendas 30d | Vendas 90d | Fonte ref. | Data ref. | Flag | Links |") in md
 
 
 def test_ratio_column_header_named_after_language_and_values_are_tcg_over_ct():
     df, cfg = _enriched()
     md = pp.build_delivery_markdown(df, cfg, fx_usd_brl=5.0, show_ratio=True)
     # Header: coluna logo após "Margem %", nomeada pelo idioma das ofertas.
-    assert ("| # | Margem % | Razão EN/ZH-CN | CT US$ | TCG US$ | Dif | Carta | Set | "
-            "Raridade | Cond | Qtd | Flag | Links |") in md
+    assert ("| # | Margem % | Razão EN/ZH-CN | CT US$ | TCG US$ | Dif | Carta | Edição | Acabamento | Set | "
+            "Raridade | Cond | Qtd | Vendas 30d | Vendas 90d | Fonte ref. | Data ref. | Flag | Links |") in md
     rows = [l for l in md.splitlines() if l.startswith("| ") and "Pikachu" in l]
     assert rows and "| 6.0× |" in rows[0], rows
     rows = [l for l in md.splitlines() if l.startswith("| ") and "Mew ex" in l]
@@ -236,7 +236,7 @@ def _raw_df_with_nao_row():
         "LIVE R$ (real)": [10.0],            # CT US$ 2.00
         "TCG Market (BRL)": [60.0], "TCG Market (USD)": [12.00],   # razão 6.0×
         "Net Margin % REAL": [0.8333], "Lucro R$ REAL": [50.0],
-        "Validation Status": ["VALIDATED_REAL"],
+        "Validation Status": ["STALE"],   # rejeitada por regra NAO nao-chase (chase nao decide mais)
         "Link CardTrader": ["https://www.cardtrader.com/cards/4"],
         "Link TCG": ["https://www.tcgplayer.com/product/4"],
     })

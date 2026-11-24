@@ -187,8 +187,8 @@ def test_top50_sorted_by_net_desc():
     wb = _write_and_load(_build_realistic_raw_df())
     ws = wb["Top 50 Margin"]
     headers = [c.value for c in ws[1]]
-    assert "Net %" in headers
-    net_idx = headers.index("Net %") + 1
+    assert "Margem venda %" in headers
+    net_idx = headers.index("Margem venda %") + 1
     vals = [ws.cell(row=r, column=net_idx).value for r in range(2, ws.max_row + 1)]
     vals_num = [v for v in vals if isinstance(v, (int, float))]
     assert vals_num == sorted(vals_num, reverse=True), f"Top 50 não está desc: {vals_num}"

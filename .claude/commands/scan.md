@@ -22,7 +22,7 @@ anterior já foi entregue). Se algo aqui divergir do `CLAUDE.md`, ele vence.
 
 1. **Python do ambiente**: Windows local `.venv\Scripts\python.exe`; nuvem/CI
    `python` (instale `requirements.txt` em clone limpo).
-2. **Chaves**: `CT_JWT` e `POKEMONTCG_API_KEY` no ambiente ou `.env`. Cuidado
+2. **Chaves**: `CT_JWT` (obrigatória) e `POKEMONTCG_API_KEY` (opcional: só a 2ª fonte de preço) no ambiente ou `.env`. Cuidado
    com BOM/zero-width (`.strip()` NÃO tira BOM — chave suja crasha o header
    latin-1 e o scan sai "verde mas vazio"). Chave ausente/suja → reporte e
    pare. Nunca invente preço.
@@ -54,7 +54,7 @@ derivado de `SET_ALIAS_TO_PTCG` + `VINTAGE_SET_CODES` do scanner (excluídos:
 ```bash
 python cardtrader_scanner.py \
   --sets meg pfl asc por cri blk wht dri pre jtg ssp scr sfa twm tef paf par mew obf pal svi \
-  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 --max-consecutive-misses 40 \
+  --threshold 0.30 --max-consecutive-misses 40 \
   --output outputs/scan_g1_<AAAAMMDD_HHMM>.xlsx
 ```
 
@@ -62,7 +62,7 @@ python cardtrader_scanner.py \
 ```bash
 python cardtrader_scanner.py \
   --sets crz sit lorg astr brs fst evs cre bst shf viv cpa daa rcl ssh pkmgo det cec unm hif teu \
-  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 --max-consecutive-misses 40 \
+  --threshold 0.30 --max-consecutive-misses 40 \
   --output outputs/scan_g2_<AAAAMMDD_HHMM>.xlsx
 ```
 
@@ -70,7 +70,7 @@ python cardtrader_scanner.py \
 ```bash
 python cardtrader_scanner.py \
   --sets unb lot drm ces fli upr cinv bus slg gri sum evo sts fco bkp bkt aor gen ros prc dcr \
-  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 --max-consecutive-misses 40 \
+  --threshold 0.30 --max-consecutive-misses 40 \
   --output outputs/scan_g3_<AAAAMMDD_HHMM>.xlsx
 ```
 
@@ -78,7 +78,7 @@ python cardtrader_scanner.py \
 ```bash
 python cardtrader_scanner.py \
   --sets phf ffi flf kss xybsp ltr plb plf pls bcr drx dex nxd nvi epo blw drv tri und ul hgs \
-  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 --max-consecutive-misses 40 \
+  --threshold 0.30 --max-consecutive-misses 40 \
   --output outputs/scan_g4_<AAAAMMDD_HHMM>.xlsx
 ```
 
@@ -86,7 +86,7 @@ python cardtrader_scanner.py \
 ```bash
 python cardtrader_scanner.py \
   --sets clo sft ge sw mt pdp sv rr pl nbsp pk df cg hp lm ds uf em dx trr rg hl \
-  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 --max-consecutive-misses 40 \
+  --threshold 0.30 --max-consecutive-misses 40 \
   --output outputs/scan_g5_<AAAAMMDD_HHMM>.xlsx
 ```
 
@@ -94,21 +94,31 @@ python cardtrader_scanner.py \
 ```bash
 python cardtrader_scanner.py \
   --sets exma dr ss rs skg aq ex lc si n4 n3 n2 n1 g2 g1 tr b2 fo ju bs wiz bog \
-  --threshold 0.30 --validate-top 30 --min-net-margin 0.20 --max-consecutive-misses 40 \
+  --threshold 0.30 --max-consecutive-misses 40 \
   --output outputs/scan_g6_<AAAAMMDD_HHMM>.xlsx
 ```
 
 ## 3. Rodar (um run por grupo, SEQUENCIAL)
 
 - Valores canônicos em TODO run: `--threshold 0.30` (**FRAÇÃO** — inteiro `30`
-  = 3000% = zero deals sem erro), `--validate-top 30`, `--min-net-margin 0.20`,
-  `--max-consecutive-misses 40` (liga o fallback tcgcsv em set que a
-  pokemontcg.io não precifica, ex. `asc` — sem isso o set sai com 0 preço).
+  = 3000% = zero deals sem erro); **sem `--min-net-margin`** (o scanner não corta por margem; o corte único é do postprocess),
+  **sem `--validate-top`** (decisão do operador, Lote 3: a validação per-blueprint
+  cobre TODAS as oportunidades; `--validate-top N` só limita, `0` desliga),
+  `--max-consecutive-misses 40` (valor travado em teste; inofensivo: o tcgcsv, fonte principal, já vem
+  em lote por set e não corta por misses).
+- **Fonte de preço:** NÃO passe `--provider`: o padrão já é `tcgcsv`. A pokemontcg.io só entra como 2ª fonte,
+  quando o tcgcsv acha a carta sem preço. Não use `--provider tcgcsv --ignore-skip-list` como contorno: não é mais
+  necessário (set sem referência sai com motivo, sem skip-list). Resposta incompatível/ambígua do tcgcsv nunca é
+  trocada por preço da outra fonte.
 - Scan custom (`/scan pre ssp`): mesmo comando trocando só a lista de `--sets`.
 - **Nunca dois runs ao mesmo tempo** (mesma pasta de estado — o scanner
   recusa). Grupos escolhidos rodam **em sequência**, cada um em background,
   monitorado. Sets vintage lentos já têm timeout interno maior (df 20min,
   ds/n1/n4 18min) — não mexa em `--per-set-timeout`.
+- ⏱️ **Estimativa de tempo calibrada com 30 validações** (o default antigo):
+  como agora todas as oportunidades são validadas, a duração de cada grupo
+  precisa ser **remedida** num scan real (ainda não feito) — os tempos da tabela
+  são estimativa. Anote a duração real de cada grupo no resumo.
 - Grupo que estourar ~2h30 de relógio: anote a duração real no resumo e
   proponha re-dividir. Grupo que falhar não cancela os demais — registre com a
   saída real e siga.
@@ -118,14 +128,30 @@ python cardtrader_scanner.py \
 
 ## 4. Postprocess + entrega (por grupo, formato OBRIGATÓRIO)
 
-Assim que **cada grupo** terminar (não espere os outros):
+Assim que **cada grupo** terminar (não espere os outros). Para a liquidez (que libera COMPRA) adicione
+`--pc-refs N` (consultas únicas ao PriceCharting) e, se ele bloquear (403), `--pc-firecrawl N` (pago, 1 crédito por
+página, **teto 100 por scan**; padrão 0 = não gasta):
 
 ```bash
 python cardtrader_postprocess.py \
   --input outputs/scan_g<N>_<stamp>.xlsx \
-  --output outputs/relatorio_g<N>_<stamp>.xlsx \
-  --top-md 50
+  --output outputs/relatorio_g<N>_<stamp>.xlsx
 ```
+
+Como ler a decisão (regras do código, nada além disso): **Inferido** (raridade da CardTrader não informa o
+acabamento; margem estimada) = sempre REVISAR, nunca COMPRA. Referência **ambígua** = sem referência e sem preço.
+Referência **mais velha que 7 dias** (`--max-ref-age-days`), de idade desconhecida ou futura = REVISAR. Preço
+PriceCharting compatível que **diverge** mais que `--max-ref-divergence` (0,30), ou margem pela MENOR referência
+abaixo de 30% = REVISAR. COMPRA exige **liquidez** (≥5 vendas/90d e ≥1/30d). Linha que ficou sem consulta por
+orçamento Firecrawl esgotado aparece como `NAO_CONSULTADO_ORCAMENTO`; a coluna **PC Motivo** explica por quê.
+
+Se o scanner sair com código **20, 21, 22 ou 23** (validação parcial / sem preço live válido / validação falhou /
+set em falha operacional), o XLSX foi gravado e o relatório É gerado mesmo assim: rode o postprocess e **leia o aviso
+do cabeçalho** ("⚠ set(s) NÃO avaliados…") antes de colar; sets avaliados com falha precisam rodar de novo. Tabela completa dos códigos no CLAUDE.md.
+
+(**sem `--top-md`**: a entrega mostra TODAS as linhas de COMPRA e REVISAR. Se alguém limitar com
+`--top-md N`, o cabeçalho diz "mostrando N de M" e o rodapé diz quantas ficaram de fora e que
+elas estão na aba `Deals` do XLSX.)
 
 - **Cole no chat, VERBATIM, o `.md`** que ele gravou/imprimiu
   (`build_delivery_markdown` — única fonte de verdade do formato).

@@ -64,7 +64,11 @@ if str(REPO_ROOT) not in sys.path:
 from cardtrader_scanner import (  # noqa: E402
     Listing,
     Opportunity,
+    apply_validation_record,
+    now_iso,
     export_xlsx,
+    validation_key,
+    validation_key_from_record,
 )
 
 
@@ -79,6 +83,9 @@ def parse_checkpoint(checkpoint_path: Path) -> tuple[list[Opportunity], dict, di
     opportunities: list[Opportunity] = []
     header: dict = {}
     sets_complete: list[dict] = []
+    unpriced: list[dict] = []        # Lote 3b: linhas "Sem preço"
+    noref: list[dict] = []           # B1: linhas "Sem Ref Compatível"
+    validations: dict = {}           # Lote 3b: validação per-blueprint (última vence)
     scan_complete: dict = {}
     bad_lines = 0
     total_lines = 0
@@ -106,6 +113,14 @@ def parse_checkpoint(checkpoint_path: Path) -> tuple[list[Opportunity], dict, di
                 sets_complete.append(obj)
             elif typ == "scan_complete":
                 scan_complete = obj
+            elif typ == "unpriced":
+                unpriced.append({k: v for k, v in obj.items() if k != "_type"})
+            elif typ == "validation":
+                validations[validation_key_from_record(obj)] = obj
+            elif typ == "noref":
+                noref.append({k: v for k, v in obj.items() if k != "_type"})
+            elif typ == "validation_complete":
+                continue   # Lote 3c: marcador de fim da validação (sem dado)
             elif typ == "set_progress":
                 # PR-F (2026-05-28): telemetria de progresso intra-set (heartbeat
                 # JSONL). NÃO é um deal — ignora silenciosamente no recovery.
@@ -123,7 +138,16 @@ def parse_checkpoint(checkpoint_path: Path) -> tuple[list[Opportunity], dict, di
             else:
                 log.warning(f"Linha {line_no} _type desconhecido: {typ!r}")
 
+    applied = 0
+    for o in opportunities:
+        rec = validations.get(validation_key(o))
+        if rec:
+            apply_validation_record(o, rec)
+            applied += 1
     stats_summary = {
+        "unpriced": unpriced,
+        "noref": noref,
+        "validations_applied": applied,
         "total_lines": total_lines,
         "bad_lines": bad_lines,
         "sets_complete": len(sets_complete),
@@ -161,6 +185,8 @@ def _reconstruct_opportunity(d: dict) -> Opportunity:
         seller_user_type=listing_d["seller_user_type"],
         cardtrader_url=listing_d["cardtrader_url"],
         rarity=listing_d.get("rarity", ""),
+        first_edition=bool(listing_d.get("first_edition", False)),
+        first_edition_known=bool(listing_d.get("first_edition_known", False)),
     )
     return Opportunity(
         listing=listing,
@@ -171,7 +197,7 @@ def _reconstruct_opportunity(d: dict) -> Opportunity:
         margin_brl=d["margin_brl"],
         estimated_shipping_brl=d["estimated_shipping_brl"],
         net_margin_pct=d["net_margin_pct"],
-        scanned_at=d.get("scanned_at", datetime.now().isoformat(timespec="seconds")),
+        scanned_at=d.get("scanned_at") or now_iso(),
         validation_status=d.get("validation_status", "NOT_VALIDATED"),
         live_price_brl=d.get("live_price_brl"),
         real_margin_pct=d.get("real_margin_pct"),
@@ -195,7 +221,28 @@ def _reconstruct_opportunity(d: dict) -> Opportunity:
         # v2.14 (candidato 4): flag de baixa confiança de variante. Default
         # False — checkpoints pré-v2.14 não tinham (sem crash).
         variant_low_confidence=d.get("variant_low_confidence", False),
+        # Lote 3/3b: fonte + data/hora da referência e flag near-miss. Sem isto o
+        # recovery perdia a proveniência do preço (tcgcsv x pokemontcg).
+        price_source=d.get("price_source"),
+        price_fetched_at=d.get("price_fetched_at", ""),
+        below_threshold=d.get("below_threshold", False),
+        validated_at=d.get("validated_at", "") or "",
+        validation_reused=bool(d.get("validation_reused", False)),
+        edition=d.get("edition"),     # ausente (checkpoint antigo) = NÃO INFORMADA (None)
+        finish=d.get("finish"),
+        ref_data_at=d.get("ref_data_at", "") or "",
+        ref_data_label=d.get("ref_data_label", "") or "",
+        ref_compatible=bool(d.get("ref_compatible", False)),
+        validation_reason=d.get("validation_reason", "") or "",
     )
+
+
+def mark_below_min_net(opps: list, min_net: float) -> list:
+    """B1d: mesmo princípio do scanner — só MARCA (log), nunca remove; o corte único é do postprocess."""
+    low = [o for o in opps if (o.real_net_margin_pct or o.net_margin_pct or 0) < min_net]
+    log.info(f"--min-net-margin {min_net:.0%}: {len(low)} de {len(opps)} abaixo do valor (apenas "
+             "marcadas; seguem no XLSX, o postprocess classifica)")
+    return opps
 
 
 def main() -> int:
@@ -253,9 +300,7 @@ def main() -> int:
         )
 
     if args.min_net_margin > 0:
-        before = len(opps)
-        opps = [o for o in opps if (o.real_net_margin_pct or o.net_margin_pct or 0) >= args.min_net_margin]
-        log.info(f"Filtro --min-net-margin {args.min_net_margin:.0%}: {before} → {len(opps)}")
+        opps = mark_below_min_net(opps, args.min_net_margin)
 
     # Re-sort por margem líq REAL (fallback margem bruta) — comportamento equiv
     # ao scanner pós-validação.
@@ -307,6 +352,8 @@ def main() -> int:
         usd_brl=fx_usd_brl,
         eur_brl=fx_eur_brl,
         threshold=args.threshold,
+        unpriced=summary.get("unpriced") or None,
+        noref=summary.get("noref") or None,
     )
     log.info(
         f"✓ Recovered {len(opps)} opportunities across "

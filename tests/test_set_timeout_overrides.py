@@ -157,6 +157,7 @@ class _FakeScanner:
         self.stats = {"expansions_timed_out": 0}
 
     _check_set_timeout = sc.Scanner._check_set_timeout
+    _set_outcome = sc.Scanner._set_outcome  # Lote 3: timeout vira falha operacional
 
 
 def test_check_set_timeout_uses_explicit_effective_value(monkeypatch):
@@ -164,6 +165,8 @@ def test_check_set_timeout_uses_explicit_effective_value(monkeypatch):
     per_set_timeout_s default: um set 'velho' há 10min aborta sob default de
     8min, mas NÃO sob override de 20min."""
     added = []
+    # Lote 3: timeout é falha OPERACIONAL — nunca grava skip-list (o teste antigo
+    # exigia a gravação; a regra do operador a proíbe).
     monkeypatch.setattr(sc, "add_to_skip_list",
                         lambda code, reason: added.append((code, reason)))
 
@@ -175,7 +178,9 @@ def test_check_set_timeout_uses_explicit_effective_value(monkeypatch):
     aborted_default = fake._check_set_timeout(
         set_start, "df", "EX Dragon Frontiers", "test", timeout_s=8 * 60)
     assert aborted_default is True
-    assert added and added[-1][0] == "df"
+    assert added == [], added  # sem skip-list
+    assert fake._set_status == "operational_failure"
+    assert fake._set_reason.startswith("per_set_timeout_480s")
 
     # Sob override (20min): 10min < 20min → NÃO aborta.
     aborted_override = fake._check_set_timeout(

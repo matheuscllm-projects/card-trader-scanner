@@ -296,7 +296,7 @@ def _raw_df():
 
 def _enriched(cfg=None):
     cfg = cfg or pp.DecisionConfig()
-    return pp.enrich_df(_raw_df(), hub_fee_rate=cfg.hub_fee_rate), cfg
+    return pp.enrich_df(_raw_df(), hub_fee_rate=cfg.hub_fee_rate).assign(ref_age_dias=0.0), cfg
 
 
 def test_delivery_without_pc_is_unchanged():
@@ -307,64 +307,79 @@ def test_delivery_without_pc_is_unchanged():
     assert "[PC]" not in md
 
 
+_FIX = os.path.join(os.path.dirname(__file__), "fixtures", "pricecharting_real")
+_LUGIA = open(os.path.join(_FIX, "lugia_unlimited.html"), encoding="utf-8").read()
+_PC_URL = "https://www.pricecharting.com/game/pokemon-paradox-rift/plusle-193"
+_OK = {"pc_status": "OK", "pc_url": _PC_URL, "pc_vendas_30d": 2, "pc_vendas_90d": 7,
+       "pc_truncado": False, "pc_edicao": "unl"}
+
+
+def _pc_enriched():
+    raw = _raw_df()
+    raw["Edição"] = "Unlimited"
+    raw["Ref Compatível"] = "Sim"
+    raw["Data Ref."], raw["Rótulo Data Ref."] = __import__("datetime").date.today().isoformat(), "dado de"
+    return pp.enrich_df(raw, hub_fee_rate=0.06).assign(ref_age_dias=0.0), pp.DecisionConfig()
+
+
+def _fetch(url, cache_dir=None):
+    return _LUGIA
+
+
 def test_attach_pc_refs_uses_injected_resolver_and_caps():
-    df, cfg = _enriched()
+    df, cfg = _pc_enriched()
     calls = []
 
-    def fake_resolver(name, number, set_label, cache_dir=None, variant=None):
+    def dem(name, number, set_label, *, edition, cache_dir=None, variant=None):
         calls.append(name)
-        return {"median": 30.0, "n_sales": 7,
-                "url": "https://www.pricecharting.com/game/x/y-1"}
+        return dict(_OK)
 
-    n, attempted = pp.attach_pc_refs(df, cfg, top_md=50, limit=1,
-                                     resolver=fake_resolver)
+    n, attempted = pp.attach_pc_refs(df, cfg, top_md=50, limit=1, demand_resolver=dem,
+                                     page_fetcher=_fetch)
     assert n == 1
-    assert attempted == 1  # denominador honesto: tentadas, não o valor da flag
-    assert len(calls) == 1
-    assert calls[0] == "Plusle"  # maior margem primeiro
+    assert attempted == 1  # denominador honesto: consultas tentadas, não o valor da flag
+    assert calls == ["Charizard ex"]  # maior LUCRO primeiro (400 > 120)
     assert df["pc_median_usd"].notna().sum() == 1
 
 
 def test_delivery_with_pc_columns_and_link():
-    df, cfg = _enriched()
+    df, cfg = _pc_enriched()
+    df["reference_price_usd"] = pcr.median_ungraded_sold(_LUGIA)[0]      # B1k: referências coerentes (senão divergem = REVISAR)
 
-    def fake_resolver(name, number, set_label, cache_dir=None, variant=None):
+    def dem(name, number, set_label, *, edition, cache_dir=None, variant=None):
         if name == "Plusle":
-            return {"median": 30.0, "n_sales": 7,
-                    "url": "https://www.pricecharting.com/game/pokemon-paradox-rift/plusle-193"}
-        return None  # Charizard: PC não resolveu → célula honesta "—"
+            return dict(_OK)
+        return {"pc_status": "SEM_PAGINA_COMPATIVEL", "pc_url": None}  # Charizard: sem página
 
-    pp.attach_pc_refs(df, cfg, top_md=50, limit=50, resolver=fake_resolver)
+    pp.attach_pc_refs(df, cfg, top_md=50, limit=50, demand_resolver=dem, page_fetcher=_fetch)
     md = pp.build_delivery_markdown(df, cfg, fx_usd_brl=5.0)
     assert "Ref PC US$" in md and "Margem PC %" in md
-    # Plusle: CT US$ 24.00, PC 30.00 → margem PC = (30−24)/30 = 20%
-    assert "30.00" in md
-    assert "20%" in md
-    assert "[PC](https://www.pricecharting.com/game/pokemon-paradox-rift/plusle-193)" in md
-    # Charizard sem PC → "—" na coluna e SEM link [PC] na linha dele
+    med, _ = pcr.median_ungraded_sold(_LUGIA)
+    assert f"{med:,.2f}" in md
+    assert f"[PC]({_PC_URL})" in md
+    # Charizard sem PC → "—" na coluna, SEM link [PC] e REVISAR com o motivo da liquidez
     charizard_line = next(l for l in md.splitlines() if "Charizard" in l)
-    assert "—" in charizard_line
-    assert "[PC]" not in charizard_line
-    # contrato de 2 links intacto em toda linha
-    for line in md.splitlines():
+    assert "—" in charizard_line and "[PC]" not in charizard_line
+    assert "liquidez não verificada: SEM_PAGINA_COMPATIVEL" in charizard_line
+    # Plusle: liquidez 7/90d e 2/30d → COMPRA (sem flag de cautela)
+    plusle_line = next(l for l in md.splitlines() if "Plusle" in l)
+    assert "validar manual" not in plusle_line and "| 7 |" in plusle_line
+    for line in md.splitlines():  # contrato de 2 links intacto em toda linha
         if line.startswith("| ") and "oferta" in line:
             assert "[TCG]" in line
 
 
 def test_delivery_pc_divergence_flag():
     """TCG US$ ≫ mediana PC (>30% acima) → flag 'PC diverge' na linha."""
-    df, cfg = _enriched()
+    df, cfg = _pc_enriched()
+    df["reference_price_usd"] = [10000.0, 10000.0]   # muito acima da mediana PC real
 
-    def fake_resolver(name, number, set_label, cache_dir=None, variant=None):
-        # Plusle: TCG 44.00 vs PC 20.00 → 120% acima → diverge
-        return ({"median": 20.0, "n_sales": 5,
-                 "url": "https://www.pricecharting.com/game/x/plusle-193"}
-                if name == "Plusle" else None)
+    def dem(name, number, set_label, *, edition, cache_dir=None, variant=None):
+        return dict(_OK)
 
-    pp.attach_pc_refs(df, cfg, top_md=50, limit=50, resolver=fake_resolver)
+    pp.attach_pc_refs(df, cfg, top_md=50, limit=50, demand_resolver=dem, page_fetcher=_fetch)
     md = pp.build_delivery_markdown(df, cfg, fx_usd_brl=5.0)
-    plusle_line = next(l for l in md.splitlines() if "Plusle" in l)
-    assert "PC diverge" in plusle_line
+    assert "PC diverge" in next(l for l in md.splitlines() if "Plusle" in l)
 
 
 if __name__ == "__main__":
