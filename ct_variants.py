@@ -346,7 +346,7 @@ def match_offer(prices: dict, first_edition: bool, reverse: bool, ct_rarity: Opt
     conflict = None
     if not reverse:
         if not hd_ct.is_holo:
-            hd_ref = holo_detection(ref_rarity, set_released=set_released)
+            hd_ref = holo_detection(ref_rarity, set_released=set_released, set_code=set_code)   # exceções de era valem p/ os DOIS lados
             if hd_ref.is_holo:
                 normal_keys = sorted(k for k, c in _usable(prices).items() if c[1] == FIN_NORMAL)
                 if rarity_conclusive(ct_rarity) and normal_keys:

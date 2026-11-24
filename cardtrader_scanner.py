@@ -3208,6 +3208,10 @@ class CheckpointWriter:
             self._fh = None
 
 
+def _n_falhas(n: int) -> str:
+    return f"{n} falha" if n == 1 else f"{n} falhas"
+
+
 class SourceBreaker:
     """B1e: disjuntor da fonte principal de preço, medido POR OFERTA dentro do run.
 
@@ -4198,9 +4202,9 @@ class Scanner:
             if breaker_opened:
                 self.__dict__.setdefault("_breaker_sets", set()).add(exp_code)
                 self._set_breaker_note = (f"disjuntor aberto às {brk.opened_at:%H:%M} após "
-                                          f"{brk.fail_count} falhas em {brk.sample_count} ofertas")
+                                          f"{_n_falhas(brk.fail_count)} em {brk.sample_count} ofertas")
                 log.warning(f"  🔌 {self._primary_name()} DEGRADADA em {exp_code} após {i} oferta(s): "
-                            f"{brk.fail_count} falhas em {brk.sample_count} — o restante do set vai "
+                            f"{_n_falhas(brk.fail_count)} em {brk.sample_count} — o restante do set vai "
                             f"direto ao tcgcsv (lote, mesma regra exata); sem skip-list")
                 yield from self._conclude_set(
                     exp_code, exp_name, _pending(i), causes, total_listings, set_tcg_hits,
@@ -4693,7 +4697,7 @@ class Scanner:
                     parts.append(f"pokemontcg.io degradada às {e['at']:%H:%M} por latência (média acima de "
                                  f"{e.get('slow_s', 0):g} s em {e['n']} ofertas)")
                 else:
-                    parts.append(f"pokemontcg.io degradada às {e['at']:%H:%M} após {e['fails']} falhas "
+                    parts.append(f"pokemontcg.io degradada às {e['at']:%H:%M} após {_n_falhas(e['fails'])} "
                                  f"em {e['n']}")
             else:
                 parts.append(f"voltou às {e['at']:%H:%M}")
