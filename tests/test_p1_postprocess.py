@@ -25,7 +25,7 @@ def _raw(**over):
         "Card Name": "Lugia", "Nº": "9", "Set": "Neo Genesis (n1)", "Rarity": "Holo Rare",
         "Condição": "NM", "Qtd": 1, "Scan R$ (raw)": 60.0, "TCG Market (BRL)": 100.0,
         "TCG Market (USD)": 18.0, "Validation Status": "NOT_VALIDATED",
-        "Variant": "holofoil", "Link CardTrader": CT, "Link TCG": TCG, "Edição": "Unlimited",
+        "Variant": "holofoil", "Ref Compatível": "Sim", "Link CardTrader": CT, "Link TCG": TCG, "Edição": "Unlimited",
     }
     base.update(over)
     return pd.DataFrame([{k: v for k, v in base.items() if v is not None}])

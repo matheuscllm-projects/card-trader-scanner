@@ -32,7 +32,7 @@ def test_rarity_igual_as_duas_copias():
 
 
 def test_patterns_order_only_iguais():
-    assert ct_chase.CHASE_TIER_PATTERNS == sc.CHASE_TIER_PATTERNS == pp.CHASE_TIER_PATTERNS
+    assert ct_chase.CHASE_TIER_PATTERNS == sc.CHASE_TIER_PATTERNS
     assert ct_chase.CHASE_TIER_ORDER == sc.CHASE_TIER_ORDER
     assert ct_chase.CHASE_ONLY_TIERS == sc.CHASE_ONLY_TIERS
 
@@ -58,8 +58,9 @@ def test_divergencia_conhecida_rarity_vazia_proxies_none():
     """
     assert sc.classify_chase_tier("") == ""
     assert sc.classify_chase_tier(None) == ""
-    assert pp.classify_chase_tier("") == "MODEST"
-    assert pp.classify_chase_tier(None) == "MODEST"
+    # P1: o postprocess nao tem mais copia; importa de ct_chase (a divergencia "MODEST" acabou).
+    assert pp.classify_chase_tier is ct_chase.classify_chase_tier
+    assert pp.classify_chase_tier("") == ""
     assert ct_chase.classify_chase_tier("") == ""
     assert ct_chase.classify_chase_tier(None) == ""
 
