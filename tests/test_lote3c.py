@@ -473,3 +473,9 @@ def test_docs_carry_the_measured_times_note():
         txt = (REPO_ROOT / rel).read_text(encoding="utf-8")
         # a nota antiga ("calibrada com 30 validações / remedida") foi trocada pelos tempos medidos
         assert "2026-11-24" in txt and "pokemontcg" in txt, rel
+    import re
+    scan = (REPO_ROOT / ".claude/commands/scan.md").read_text(encoding="utf-8")
+    for g in ("G1", "G2", "G3", "G4", "G5", "G6"):
+        row = next(l for l in scan.splitlines() if l.startswith(f"| **{g}**"))
+        assert re.search(r"\d+,\d+ min", row), f"{g} sem tempo numérico: {row}"
+    assert re.search(r"`--vintage` \(34 sets\): \d+,\d+ min", scan)

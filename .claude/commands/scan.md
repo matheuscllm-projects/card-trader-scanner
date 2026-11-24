@@ -47,7 +47,7 @@ derivado de `SET_ALIAS_TO_PTCG` + `VINTAGE_SET_CODES` do scanner (excluídos:
 | **G2** | era Sword & Shield + Pokémon GO + Detective Pikachu + SM final | 21 | 2,4 min |
 | **G3** | Sun & Moon restante + XY final | 21 | 1,2 min |
 | **G4** | XY inicial + era Black & White + HGSS | 21 | 1,0 min |
-| **G5** | Call of Legends + DP + Platinum + EX tardio (tem sets lentos) | 26 | 0,8 min (22 sets; os 4 novos não medidos) |
+| **G5** | Call of Legends + DP + Platinum + EX tardio (tem sets lentos) | 26 | 0,7 min (26 sets, com md/la/dp/ar/dpbsp) |
 | **G6** | EX inicial + e-Card + WotC (Base…Neo, Gym, promos) | 22 | 0,9 min |
 
 _Ressalva: medido com tcgcsv como fonte principal, validando todas as candidatas (sem top-N); com `--provider pokemontcg` não foi medido. `--vintage` (34 sets): 1,2 min. DP Black Star Promos = `dpbsp` (id 1517 na API de expansões da CardTrader; o antigo `pdp` não existia)._

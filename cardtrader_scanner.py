@@ -1924,7 +1924,7 @@ class PokemonTcgIoProvider(PricingProvider):
         "slg":   ["sm35"],        # Shining Legends
         "drm":   ["sm75"],        # Dragon Majesty
         "hif":   ["sm115"],       # Hidden Fates
-        "dpbsp": ["dpp"],         # DP Black Star Promos (CT 1517)
+        "dpbsp": ["dpp"],         # DP Black Star Promos (CT 1517; dpp verificado na API 2026-11-24)
         # McDonald's promos (trivial 1-to-1)
         "mc11":  ["mcd11"],
         "mc12":  ["mcd12"],

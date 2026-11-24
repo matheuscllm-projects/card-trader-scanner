@@ -208,7 +208,7 @@ pedir um scan ao assistente — formato padrão da frota, igual ao `scan-myp`.
 Os **132 sets com preço de referência real** (derivados de
 `SET_ALIAS_TO_PTCG` + `VINTAGE_SET_CODES`, sem os `wcd*`/McDonald's/duplicatas)
 estão divididos em **6 grupos por recência** (G1 = Mega Evolution até Chaos
-Rising + era SV … G6 = EX inicial + e-Card + WotC), cada um de poucos minutos (medido 2026-11-24: G1 3,5 · G2 2,4 · G3 1,2 · G4 1,0 · G5 0,8 · G6 0,9 min; `--vintage` 1,2 min) —
+Rising + era SV … G6 = EX inicial + e-Card + WotC), cada um de poucos minutos (medido 2026-11-24: G1 3,5 · G2 2,4 · G3 1,2 · G4 1,0 · G5 0,7 · G6 0,9 min; `--vintage` 1,2 min) —
 runs mais longos morriam sem entregar. O skill **sempre pergunta quais grupos
 rodar**, roda um por vez (nunca em paralelo) com os valores canônicos
 (threshold 0.30, max-consecutive-misses 40; **sem** `--validate-top`
@@ -590,7 +590,7 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
   meio do set: o que faltava vai para "Sem preço" (falha operacional) — a soma
   precificadas + sem preço = total vale sempre. `/groups` do tcgcsv: 3 tentativas
   com espera curta e cache negativo de ~3 min dentro do run.
-- ⏱️ **Tempos dos grupos medidos em 2026-11-24** (tcgcsv como fonte principal, valida todas as candidatas, sem top-N): G1 3,5 · G2 2,4 · G3 1,2 · G4 1,0 · G5 0,8 (antes de entrarem md/la/dp/ar) · G6 0,9 min; `--vintage` (34 sets) 1,2 min. **Não medido** com `--provider pokemontcg`.
+- ⏱️ **Tempos dos grupos medidos em 2026-11-24** (tcgcsv como fonte principal, valida todas as candidatas, sem top-N): G1 3,5 · G2 2,4 · G3 1,2 · G4 1,0 · G5 0,7 (26 sets, com md/la/dp/ar/dpbsp) · G6 0,9 min; `--vintage` (34 sets) 1,2 min. **Não medido** com `--provider pokemontcg`.
 - **Resgate tcgcsv** (caminho `--provider pokemontcg`): tudo que a pokemontcg.io não precificou (misses do fim do
   set, falhas, listings não alcançados) é oferecido ao tcgcsv (referência buscada
   **neste run**, correspondência exata de edição e acabamento). Cada linha leva `Fonte Preço` e
