@@ -39,10 +39,9 @@ def test_unknown_label_with_a_single_normal_print_is_inferred_never_sim(label):
 def test_unknown_label_single_holo_print_needs_a_holo_reference_rarity():
     prices = {"holofoil": {"market": 5.0}}
     assert cv.match_offer(prices, False, False, "Fixed", ref_rarity="Rare BREAK", set_released="2016-08-03").inferred
-    assert cv.match_offer(prices, False, False, "Fixed", ref_rarity="Common", set_released="2016-08-03"
-                          ).match.status == cv.INCOMPATIVEL
-    assert cv.match_offer(prices, False, False, "Promo", ref_rarity="Rare BREAK", set_released="2016-08-03"
-                          ).match.status == cv.INCOMPATIVEL      # vazia/Promo: política "holo" = sem referência
+    # decisão do dono (opção B): única impressão holo infere para QUALQUER rótulo inconclusivo
+    for lbl in ("Fixed", "Promo"):
+        assert cv.match_offer(prices, False, False, lbl, ref_rarity="Common", set_released="2016-08-03").inferred
 
 
 # ───────── M1: primário tcgcsv + 2ª fonte: cada linha conta UMA vez ─────────
@@ -144,3 +143,46 @@ def test_ptcg_exact_name_breaks_the_tie_and_a_single_result_is_unchanged(tmp_pat
 def test_ptcg_full_number_with_denominator_breaks_the_tie(tmp_path):
     p = _ptcg(tmp_path, [_card("a", "Mew ex", total=165, price=5.0), _card("b", "Mew ex", total=191, price=50.0)])
     assert p.market_price_usd("Mew ex", "sv3pt5", "205/165", rarity="Rare Holo") == 5.0
+
+
+# ───────── decisões do dono (2026-11-24) ─────────
+def test_policy_single_holo_print_infers_for_promo_and_empty_and_fixed():
+    assert cv.INCONCLUSIVE_SINGLE_PRINT_POLICY == {"normal": "inferir", "holo": "inferir"}
+    prices = {"holofoil": {"market": 5.0}}
+    for lbl in ("Promo", "", "Fixed"):
+        om = cv.match_offer(prices, False, False, lbl, ref_rarity="Common", set_released="2016-08-03")
+        assert om.match.status == cv.OK and om.match.key == "holofoil" and om.inferred, lbl
+    om = cv.match_offer(prices, False, False, "Promo", ref_rarity="Common")
+    assert "raridade 'Promo' não informa o acabamento; a referência só tem a impressão holo" in om.inferred
+    two = {"normal": {"market": 1.0}, "holofoil": {"market": 5.0}}
+    assert cv.match_offer(two, False, False, "Promo").match.status == cv.INCOMPATIVEL
+
+
+def test_default_provider_is_tcgcsv():
+    src = (REPO_ROOT / "cardtrader_scanner.py").read_text(encoding="utf-8")
+    i = src.index('p.add_argument("--provider"')
+    assert 'default="tcgcsv"' in src[i:i + 200]
+
+
+def test_incompatible_answer_from_tcgcsv_is_never_swapped_for_a_pokemontcg_price():
+    alt = _alt(price=42.0)
+    s = _tcgcsv_primary([(1, "Normal", 3.0), (2, "Normal", 3.0)], alt=alt)   # só Normal: oferta Holo = INCOMPATIVEL
+    assert list(s.scan_expansion(EXP)) == []
+    assert alt.market_price_usd.call_count == 0
+    assert "pokemontcg" not in s.noref_rows[0]["motivo"].split("|")[0]
+
+
+def test_tcgcsv_without_price_for_the_right_key_does_ask_pokemontcg():
+    alt = _alt(price=42.0)
+    s = _tcgcsv_primary([(1, "Holofoil", None), (2, "Holofoil", None)], alt=alt)
+    opps = list(s.scan_expansion(EXP))
+    assert len(opps) == 2 and all(o.price_source == "pokemontcg" for o in opps)
+
+
+def test_age_unknown_future_or_over_limit_blocks_compra_and_fresh_allows_it():
+    cfg = pp.DecisionConfig()
+    assert cfg.max_ref_age_days == 7
+    for age in (float("nan"), -2.0, 8.0):
+        d, _ = pp.classify_decision(_row(ref_age_dias=age), cfg, check_liquidity=False)
+        assert d == "REVISAR", age
+    assert pp.classify_decision(_row(ref_age_dias=3.0), cfg, check_liquidity=False)[0] == "COMPRA"

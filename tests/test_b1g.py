@@ -79,9 +79,9 @@ def test_inconclusive_cardtrader_rarity_policy_is_one_named_decision_point():
     assert cv.NO_INFERENCE_CT_RARITIES == frozenset({"", "promo"})
     prices = {"holofoil": {"market": 14.0}}
     om = cv.match_offer(prices, False, False, "Promo", ref_rarity="Holo Rare", set_released="2019-04-05")
-    assert om.match.status == cv.INCOMPATIVEL and om.inferred is None             # promo continua sem referência
+    assert om.match.status == cv.OK and om.inferred                                # B1j: única holo = Inferido
     om = cv.match_offer(prices, False, False, None, ref_rarity="Holo Rare", set_released="2019-04-05")
-    assert om.match.status == cv.INCOMPATIVEL
+    assert om.match.status == cv.OK and om.inferred
     # rótulo desconhecido da CT (BREAK = "Fixed") + produto holo-only: acabamento INFERIDO, não "Sim"
     om = cv.match_offer({"holofoil": {"market": 5.0}}, False, False, "Fixed", ref_rarity="Rare BREAK",
                         set_released="2016-08-03")
@@ -169,7 +169,7 @@ def test_unknown_age_never_swaps_and_undated_tcgcsv_says_batch_date_not_informed
 # ───────── E: a 2ª fonte opcional não derruba o set; mesmas flags do disjuntor ─────────
 def _primary_tcgcsv(alt):
     from test_b1f import _tcgcsv_primary
-    return _tcgcsv_primary([(1, "Normal", 3.0), (2, "Normal", 3.0)], alt=alt)
+    return _tcgcsv_primary([(1, "Holofoil", None), (2, "Holofoil", None)], alt=alt)
 
 
 def test_second_source_arbitrary_exception_is_a_per_offer_failure_not_a_failed_set():
@@ -364,17 +364,18 @@ def test_promo_with_only_a_normal_print_matches_but_as_inferred(name, num, price
     assert p.last_ref_exact in (True, False)                                  # ainda é Match OK; o rótulo é "Inferido"
 
 
-def test_mirror_case_promo_with_only_a_holofoil_print_stays_without_reference():
+def test_mirror_case_promo_with_only_a_holofoil_print_is_inferred_since_b1j():
     xy = _PRM["xybsp"][0]
     p = _real_provider("xybsp", 1451, "XY Black Star Promos", "2014-02-05T00:00:00", [xy])
-    assert p.market_price_usd(xy["name"], "xybsp", xy["number"], rarity="Promo") is None
-    assert p.last_ref_status == cv.INCOMPATIVEL and not p.last_ref_inferred
-    # a escolha mora num único mapa nomeado: trocar o valor muda o resultado
-    assert cv.INCONCLUSIVE_SINGLE_PRINT_POLICY == {"normal": "inferir", "holo": "sem_referencia"}
+    assert p.market_price_usd(xy["name"], "xybsp", xy["number"], rarity="Promo") is not None
+    assert p.last_ref_inferred and "só tem a impressão holo" in p.last_ref_inferred
+    assert cv.INCONCLUSIVE_SINGLE_PRINT_POLICY == {"normal": "inferir", "holo": "inferir"}
 
 
 def test_policy_map_is_the_single_switch(monkeypatch):
     prices = {"holofoil": {"market": 7.0}}
+    assert cv.match_offer(prices, False, False, "Promo", ref_rarity="Promo").match.status == cv.OK
+    monkeypatch.setitem(cv.INCONCLUSIVE_SINGLE_PRINT_POLICY, "holo", "sem_referencia")
     assert cv.match_offer(prices, False, False, "Promo", ref_rarity="Promo").match.status == cv.INCOMPATIVEL
     monkeypatch.setitem(cv.INCONCLUSIVE_SINGLE_PRINT_POLICY, "holo", "inferir")
     om = cv.match_offer(prices, False, False, "Promo", ref_rarity="Promo")

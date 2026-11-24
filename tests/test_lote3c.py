@@ -347,7 +347,7 @@ def _fake_main_env(monkeypatch, tmp_path, scan_fn, argv_extra=()):
     out = tmp_path / "o.xlsx"
     monkeypatch.setattr(sys, "argv", [
         "cardtrader_scanner.py", "--sets", "asc", "--state-dir", str(tmp_path / "st"),
-        "--output", str(out), "--no-tcgcsv-fallback", *argv_extra])
+        "--output", str(out), "--no-tcgcsv-fallback", "--provider", "pokemontcg", *argv_extra])
     return holder, out
 
 

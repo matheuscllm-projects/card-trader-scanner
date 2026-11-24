@@ -226,7 +226,7 @@ def _alt(price=None, status=None):
 
 
 def test_fallback_works_both_ways_tcgcsv_first_without_variant_asks_pokemontcg():
-    rows = [(1, "Normal", 3.0), (2, "Normal", 3.0)]           # só Normal: oferta Holo não casa no tcgcsv
+    rows = [(1, "Holofoil", None), (2, "Holofoil", None)]           # só Normal: oferta Holo não casa no tcgcsv
     alt = _alt(price=42.0)
     s = _tcgcsv_primary(rows, alt=alt)
     opps = list(s.scan_expansion(EXP))
@@ -236,7 +236,7 @@ def test_fallback_works_both_ways_tcgcsv_first_without_variant_asks_pokemontcg()
 
 def test_both_sources_without_variant_register_both_reasons():
     alt = _alt(price=None, status=cv.INCOMPATIVEL)
-    s = _tcgcsv_primary([(1, "Normal", 3.0), (2, "Normal", 3.0)], alt=alt)
+    s = _tcgcsv_primary([(1, "Holofoil", None), (2, "Holofoil", None)], alt=alt)
     assert list(s.scan_expansion(EXP)) == []
     r = s.noref_rows[0]
     assert "tcgcsv:" in r["motivo"] and "pokemontcg:" in r["motivo"]
@@ -244,7 +244,7 @@ def test_both_sources_without_variant_register_both_reasons():
 
 def test_degraded_second_source_is_not_called_just_to_fill_the_table():
     alt = _alt(price=42.0)
-    s = _tcgcsv_primary([(1, "Normal", 3.0), (2, "Normal", 3.0)], alt=alt)
+    s = _tcgcsv_primary([(1, "Holofoil", None), (2, "Holofoil", None)], alt=alt)
     s.ptcg_alt_breaker = sc.SourceBreaker()
     s.ptcg_alt_breaker.is_open, s.ptcg_alt_breaker.opened_at = True, datetime(2026, 11, 24, 8, 28)
     s.ptcg_alt_breaker._last_probe = 10 ** 12                   # sonda não vencida

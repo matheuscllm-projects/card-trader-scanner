@@ -4241,7 +4241,10 @@ class Scanner:
                     self.__dict__.setdefault("_noref_first", {})[l.uid] = self._noref_row(
                         exp_code, l, self.pricing)
                     set_noref_first.append(l)
-                elif isinstance(self.pricing, TcgCsvFallbackProvider) and self.__dict__.get("ptcg_alt") is not None:
+                elif (isinstance(self.pricing, TcgCsvFallbackProvider) and self.__dict__.get("ptcg_alt") is not None
+                      and self._pa(self.pricing, "last_ref_status", str, "") == ct_variants.SEM_PRECO):
+                    # B1j: 2ª fonte SÓ quando o tcgcsv não tem o preço da chave certa; resposta INCOMPATIVEL/ambígua
+                    # do tcgcsv nunca é trocada por um preço do pokemontcg.io
                     got = self._ask_ptcg_alt(exp_code, l)
                     if got:
                         opp = self._build_opportunity(l, got, self.ptcg_alt)
@@ -5513,8 +5516,9 @@ def parse_args():
                          "entregue com `cardtrader_postprocess.py --ratio-column`."))
     p.add_argument("--include-graded", action="store_true",
                    help="Incluir cartas graded (PSA/BGS/CGC). Default: excluir")
-    p.add_argument("--provider", choices=list(PROVIDERS.keys()), default="pokemontcg",
-                   help=("Fonte de preços TCG (default: pokemontcg). v2.26: "
+    p.add_argument("--provider", choices=list(PROVIDERS.keys()), default="tcgcsv",
+                   help=("Fonte de preços TCG (default: tcgcsv desde B1j, decisão do dono 2026-11-24; "
+                         "pokemontcg.io = 2ª fonte, só quando o tcgcsv não tem a chave/preço). v2.26: "
                          "'tcgcsv' usa o tcgcsv.com como fonte PRIMÁRIA (bulk "
                          "por set, mesma escada de variante, sem key) — útil "
                          "quando a pokemontcg.io degrada com 500/502. Set que "

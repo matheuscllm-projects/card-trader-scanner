@@ -363,7 +363,7 @@ NO_INFERENCE_CT_RARITIES = frozenset({"", "promo"})
 #   "sem_referencia" = continua SEM referência compatível
 # Mais de uma impressão não-reverse = INCOMPATIVEL (a oferta é de acabamento desconhecido). Hoje: a única
 # impressão normal infere (wiz 76); a única holo fica sem referência (xybsp 187, wiz 9, nbsp 5).
-INCONCLUSIVE_SINGLE_PRINT_POLICY = {"normal": "inferir", "holo": "sem_referencia"}
+INCONCLUSIVE_SINGLE_PRINT_POLICY = {"normal": "inferir", "holo": "inferir"}      # decisão do dono 2026-11-24 (opção B)
 
 
 def _may_infer_from_reference(ct_rarity) -> bool:

@@ -79,11 +79,11 @@ def test_tcgcsv_constructs_with_cache_only():
 
 
 # ───────────────────────── (2) default INALTERADO ─────────────────────────
-def test_default_provider_still_pokemontcg():
-    """Sem flag, --provider segue pokemontcg (comandos canônicos intactos)."""
+def test_default_provider_is_tcgcsv_since_b1j():
+    """B1j (decisão do dono 2026-11-24): sem flag, a fonte principal é o tcgcsv; pokemontcg.io = 2ª fonte."""
     with patch.object(sys, "argv", ["cardtrader_scanner.py"]):
         args = sc.parse_args()
-    assert args.provider == "pokemontcg", args.provider
+    assert args.provider == "tcgcsv", args.provider
 
 
 def test_provider_tcgcsv_is_accepted_by_cli():

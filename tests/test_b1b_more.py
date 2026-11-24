@@ -95,8 +95,8 @@ def _twm_provider(rows):
 
 
 def test_inconclusive_rarity_is_explained_in_the_reason_without_changing_the_rule():
-    prov = _twm_provider([(1, "Holofoil", 5.0)])
-    assert prov.market_price_usd("Greninja ex", "twm", "106/167", rarity="Promo") is None
+    prov = _twm_provider([(1, "Holofoil", 5.0), (1, "Normal", 2.0)])
+    assert prov.market_price_usd("Greninja ex", "twm", "106/167", rarity="Promo") is None   # duas impressões: não se presume
     assert prov.last_ref_status == cv.INCOMPATIVEL                     # regra exata intacta
     assert "inconclusiv" in prov.last_ref_reason and "holofoil" in prov.last_ref_reason
     p2 = _twm_provider([(1, "Holofoil", 5.0)])

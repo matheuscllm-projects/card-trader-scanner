@@ -83,7 +83,7 @@ def test_scanner_routes_the_ambiguous_offer_to_sem_ref_compativel_and_the_sum_cl
     import dataclasses
     from test_set_outcomes import _cards
     from test_b1f import _tcgcsv_primary
-    s = _tcgcsv_primary([(1, "Normal", 3.0), (2, "Normal", 3.0)], alt=None)
+    s = _tcgcsv_primary([(1, "Holofoil", None), (2, "Holofoil", None)], alt=None)
     # trocar o índice do set por uma colisão real: 2 produtos na mesma chave
     prov = s.pricing
     listings = _cards(3, set_code="asc")
