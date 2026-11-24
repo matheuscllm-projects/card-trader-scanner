@@ -219,7 +219,7 @@ def test_pricing_exception_rows_are_rescued_not_lost(tmp_path, monkeypatch):
     listings = _cards(3)
     scanner = _scanner_with({}, _tcgcsv_for([1, 2, 3]), listings, max_misses=40)
 
-    def flaky(card_name, set_code, num, foil=False, rarity=None):
+    def flaky(card_name, set_code, num, foil=False, rarity=None, first_edition=False):
         if num == "002/100":
             raise requests.Timeout("500")
         return 100.0
@@ -265,7 +265,7 @@ def test_xlsx_has_reference_time_column_and_unpriced_sheet(tmp_path, monkeypatch
                    unpriced=scanner.unpriced_rows)
     wb = load_workbook(out)
     hdr = [c.value for c in wb["Oportunidades"][1]]
-    assert hdr[-4:] == ["Fonte Preço", "Ref. Data/Hora", "Validado em", "Validação"], hdr[-4:]
+    assert hdr[-8:-4] == ["Fonte Preço", "Ref. Data/Hora", "Validado em", "Validação"], hdr[-8:]
     assert "Sem preço" in wb.sheetnames, wb.sheetnames
     rows = [[c.value for c in r] for r in wb["Sem preço"].iter_rows(min_row=2)]
     assert any("Card 3" in str(r) for r in rows), rows

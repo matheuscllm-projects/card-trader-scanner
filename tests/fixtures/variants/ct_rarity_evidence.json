@@ -1,0 +1,36 @@
+{
+ "_source": "CardTrader /expansions/{id}/blueprints (fixed_properties.pokemon_rarity), lido ao vivo em 2026-11-24 nos sets par(3468), twm(3674), sfa(3763), obf(3371), pal(3316).",
+ "set_released": "2023-11-03",
+ "counts_par": {
+  "Common": 77,
+  "Uncommon": 57,
+  "Ultra Rare": 47,
+  "Holo Rare": 7,
+  "Rare": 21,
+  "Illustration Rare": 35,
+  "Secret Rare": 7,
+  "Special Illustration Rare": 15,
+  "(sem raridade: sealed/acessorio)": 28
+ },
+ "counts_twm_extra": {
+  "Rare ACE": 6,
+  "Promo": 2
+ },
+ "holo": [
+  "Holo Rare",
+  "Illustration Rare",
+  "Special Illustration Rare",
+  "Rare ACE",
+  "Ultra Rare",
+  "Secret Rare",
+  "Rare"
+ ],
+ "not_holo": [
+  "Common",
+  "Uncommon"
+ ],
+ "not_asserted": [
+  "Promo"
+ ],
+ "obs": "A CardTrader NAO envia 'Double Rare' (usa 'Ultra Rare' p/ ex/V); 'Double Rare' continua reconhecido p/ grafia ptcg/tcgcsv."
+}

@@ -32,9 +32,10 @@ def test_rarity_igual_as_duas_copias():
 
 
 def test_patterns_order_only_iguais():
-    assert ct_chase.CHASE_TIER_PATTERNS == sc.CHASE_TIER_PATTERNS
-    assert ct_chase.CHASE_TIER_ORDER == sc.CHASE_TIER_ORDER
-    assert ct_chase.CHASE_ONLY_TIERS == sc.CHASE_ONLY_TIERS
+    # B1: o scanner IMPORTA do ct_chase (sem copia): identidade, nao paridade
+    assert not hasattr(sc, "CHASE_TIER_PATTERNS")
+    assert sc.CHASE_TIER_ORDER is ct_chase.CHASE_TIER_ORDER
+    assert sc.CHASE_ONLY_TIERS is ct_chase.CHASE_ONLY_TIERS
 
 
 def test_proxies_iguais_ao_postprocess():

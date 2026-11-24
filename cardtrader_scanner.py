@@ -328,6 +328,10 @@ from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+import ct_variants
+from ct_chase import CHASE_ONLY_TIERS, CHASE_TIER_ORDER, classify_chase_tier  # unico dono do chase (informativo)
+from ct_economics import Costs, compute as compute_economics  # unico dono da margem
+
 # ─── v2.3.2 fix (bug-hunt 2026-05-17): força UTF-8 no I/O ─────────────────────
 # Paridade com postprocess (commit 26c27bd). openpyxl.Workbook.save() pega
 # encoding do interpreter locale via algum caminho interno. Em Windows com
@@ -700,7 +704,7 @@ SHIPPING_EUR_PRIVATE = 12.0      # Private seller — envio mais caro
 # por fora, manualmente. Isso SUPERSEDE a fórmula antiga `× 1.06`.
 # A constante abaixo permanece apenas como valor de referência histórico/opt-in:
 # passe `--hub-fee 0.06` para reembutir os 6% (custo = live_brl × (1 + hub_fee)).
-HUB_FEE_RATE = 0.06              # referência histórica — NÃO é mais o default (v2.12)
+HUB_FEE_RATE = 0.06              # = default de --hub-fee; só afeta as colunas líquidas (B1/D8)
 
 # Paths
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -825,58 +829,7 @@ _NUMBER_IN_VERSION = re.compile(r"(\d+)\s*/\s*\d+")
 _TRAINER_GALLERY_RE = re.compile(r"^(?:TG|GG)\d+", re.IGNORECASE)
 
 
-# ══════════════════════════════════════════════════════════════════════
-# CHASE TIER — classificação de raridade (v2.13, frente "chase cards")
-# ══════════════════════════════════════════════════════════════════════
-# Espelha CHASE_TIER_PATTERNS do postprocess (mesma taxonomia oficial
-# PokemonTCG) pra manter coerência entre scanner e relatório. Substring-aware,
-# case-insensitive. Mantenha as duas listas em sincronia se editar.
-#   TOP    = raridades top (SIR/SAR/Hyper/Secret/Illustration Rare)
-#   MID    = alt/full art, rainbow/gold, double/ultra rare
-#   MODEST = holo/reverse holo, promos
-#   BULK   = common/uncommon (sem liquidez mesmo barato)
-CHASE_TIER_PATTERNS = {
-    "TOP": [
-        "special illustration rare", "sir", "illustration rare",
-        "special art rare", "sar", "hyper rare", "ultra hyper rare",
-        "secret rare", "rara secreta",
-    ],
-    "MID": [
-        "full art", "alt art", "alternate art", "alternative art",
-        "rainbow rare", "gold rare", "trainer gallery", "double rare",
-        "rara hiper", "ultra rare",
-    ],
-    "MODEST": [
-        "holo rare", "reverse holo", "reverse foil", "promo",
-        "rare holo",
-    ],
-    "BULK": [
-        "common", "comum", "uncommon", "incomum",
-    ],
-}
-# Ordem de prioridade (alto→baixo) pra ranquear e filtrar --chase-only.
-CHASE_TIER_ORDER = {"TOP": 3, "MID": 2, "MODEST": 1, "BULK": 0, "": -1}
-# Tiers considerados "chase" pelo filtro --chase-only.
-CHASE_ONLY_TIERS = {"TOP", "MID"}
-
-
-def classify_chase_tier(rarity: Optional[str]) -> str:
-    """Classifica o chase tier (TOP/MID/MODEST/BULK) a partir da rarity.
-
-    `rarity` pode vir da rarity oficial pokemontcg.io (preferida) ou da rarity
-    do blueprint CT (fallback). Sem rarity → "" (desconhecido), tratado como
-    não-chase pelo filtro. A versão completa com proxies (número supranumerário,
-    markup tier) vive no postprocess — aqui mantemos só o caminho por rarity,
-    que é o que o scanner tem em mãos durante o scan.
-    """
-    if not rarity:
-        return ""
-    r = str(rarity).lower().strip()
-    for tier, patterns in CHASE_TIER_PATTERNS.items():
-        if any(p in r for p in patterns):
-            return tier
-    # Rarity presente mas não mapeada → MODEST (conservador).
-    return "MODEST"
+# CHASE TIER: regra única em ct_chase.py (importada acima; só informativa).
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1064,11 +1017,17 @@ class Listing:
     # Fonte: blueprint CT (preferido) ou properties_hash. String vazia ""
     # se nem CT nem properties trouxerem (raro mas defensivo).
     rarity: str = ""
+    # B1: edição da OFERTA (properties_hash.first_edition). `first_edition_known` = a
+    # chave veio no payload (sem ela não dá pra afirmar "Unlimited" na conferência).
+    first_edition: bool = False
+    first_edition_known: bool = False
 
     @property
     def uid(self) -> str:
-        """Identificador único para dedup: carta + seller + condição."""
-        return f"{self.blueprint_id}:{self.seller_username}:{self.condition}"
+        """Identificador único p/ dedup: carta + seller + condição + edição + reverse
+        (1st/Unlimited e reverse/normal do mesmo vendedor NÃO se fundem)."""
+        return ct_variants.offer_uid(self.blueprint_id, self.seller_username, self.condition,
+                                     self.first_edition, bool(self.foil))
 
 
 @dataclass
@@ -1157,6 +1116,13 @@ class Opportunity:
     # se ela foi REAPROVEITADA de um run interrompido (--resume-validation).
     validated_at: str = ""
     validation_reused: bool = False
+    # B1: variante da oferta e do par de referência. `edition` ∈ ED_1ST|ED_UNL|ED_NONE (da
+    # chave de referência casada), `finish` ∈ FIN_*; `ref_compatible` = Match OK com par
+    # IDÊNTICO ao da oferta (única condição p/ o postprocess aceitar COMPRA).
+    edition: str = ct_variants.ED_UNL
+    finish: str = ct_variants.FIN_NORMAL
+    ref_compatible: bool = False
+    validation_reason: str = ""
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1252,6 +1218,7 @@ class Cache:
         # tem essa key → variant_used vira None, scanner persiste vazio.
         tcg_url = None
         variant_used = None
+        raw_prices: dict = {}
         # v2.13 (valorização): extrai metadados do card pokemontcg.io já cacheado
         # (set.releaseDate + rarity oficial). ZERO fetch extra — reusa o raw_json
         # que set_price já persistiu. Usado pelo score de valorização (idade do
@@ -1270,13 +1237,15 @@ class Cache:
                 set_release_date = (raw.get("set") or {}).get("releaseDate")
                 tcg_prices = (raw.get("tcgplayer") or {}).get("prices") or {}
                 normal_market = (tcg_prices.get("normal") or {}).get("market")
+                raw_prices = tcg_prices if isinstance(tcg_prices, dict) else {}
         except (json.JSONDecodeError, AttributeError, TypeError):
             tcg_url = None
             variant_used = None
         return {"market_usd": market, "low_usd": low, "mid_usd": mid,
                 "tcg_url": tcg_url, "variant_used": variant_used,
                 "ptcg_rarity": ptcg_rarity, "set_release_date": set_release_date,
-                "normal_market": normal_market, "fetched_at": fetched_at}
+                "normal_market": normal_market, "fetched_at": fetched_at,
+                "prices": raw_prices}
 
     def set_price(self, key: str, market: float, low: float, mid: float, raw: dict):
         self.db.execute(
@@ -1518,12 +1487,36 @@ class PricingProvider(ABC):
     # contra a âncora líquida `normal`. None quando a fonte não tem `normal`
     # (tipicamente holo rares — guard não dispara nesse caso).
     last_normal_market: Optional[float] = None
+    # B1: resultado do casamento de variante da ÚLTIMA chamada (ct_variants.Match). Status ""
+    # = carta não encontrada na fonte (miss de cobertura).
+    last_ref_status: str = ""
+    last_ref_reason: str = ""
+    last_ref_key: Optional[str] = None
+    last_ref_exact: bool = False
+    last_available_keys: list = []
+    last_offer_variant: Optional[tuple] = None   # (edicao, acabamento) da oferta
+    last_divided: bool = False                   # a carta tem chaves de edição na fonte
+    last_era_missing: bool = False
+
+    def _reset_ref(self) -> None:
+        self.last_ref_status, self.last_ref_reason, self.last_ref_key = "", "", None
+        self.last_ref_exact, self.last_available_keys = False, []
+        self.last_offer_variant, self.last_divided, self.last_era_missing = None, False, False
+
+    def _set_ref(self, m, prices: dict, offer: tuple, era_missing: bool) -> None:
+        self.last_offer_variant, self.last_era_missing = offer, era_missing
+        self.last_ref_status, self.last_ref_reason = m.status, m.reason
+        self.last_ref_key = m.key
+        self.last_available_keys = ct_variants.available_keys(prices)
+        self.last_divided = ct_variants.is_divided(prices)
+        self.last_ref_exact = ct_variants.is_exact(m, *offer)
 
     @abstractmethod
     def market_price_usd(self, card_name: str, set_code: str,
                          collector_number: str,
                          foil: bool = False,
-                         rarity: Optional[str] = None) -> Optional[float]:
+                         rarity: Optional[str] = None,
+                         first_edition: bool = False) -> Optional[float]:
         """Retorna preço market em USD ou None se não achar.
 
         `foil`: indica se o listing CT é reverse-holo (pokemon_reverse=True
@@ -1537,89 +1530,8 @@ class PricingProvider(ABC):
         ...
 
 
-def _rarity_is_holo(*rarities: Optional[str]) -> bool:
-    """True se QUALQUER rótulo de raridade indicar carta holográfica.
-
-    Casa tanto a raridade do CardTrader ("Holo Rare") quanto a do
-    pokemontcg.io ("Rare Holo", "Rare Holo EX", "Rare Holo Star",
-    "Rare Holo LV.X", "Rare Shining", ...). Usado pela seleção de
-    variante (v2.18) pra decidir se o preço de referência correto é
-    `holofoil` (carta intrinsecamente holo) ou `normal` (carta base).
-
-    NÃO casa "Reverse Holo" como raridade — no CardTrader o reverse é uma
-    propriedade separada do listing (`pokemon_reverse`), não a raridade
-    impressa; ele é tratado pelo sinal `foil`/reverse, não por aqui.
-    """
-    for r in rarities:
-        if not r:
-            continue
-        rl = r.lower()
-        # Guard defensivo: "reverse holo" como raridade (não existe no vocab CT
-        # atual — reverse é o booleano pokemon_reverse) NÃO conta como holo aqui;
-        # mantém o código fiel ao docstring se a fonte um dia mudar.
-        if "reverse" in rl:
-            continue
-        if "holo" in rl or "shining" in rl:
-            return True
-    return False
-
-
-# Variantes 1stEdition: raras e infladas 3-10× — o operador não vende 1st Ed.
-# Excluídas SEMPRE da seleção de variante (both pokemontcg.io e tcgcsv).
-_EXCLUDED_TCG_VARIANTS = {"1stEditionHolofoil", "1stEditionNormal"}
-
-
-def select_tcgplayer_variant_price(
-    tcg_prices: dict,
-    foil: Optional[bool],
-    is_holo: bool,
-) -> tuple[Optional[str], Optional[dict]]:
-    """v2.23: seleção de variante TCGplayer CIENTE de raridade + reverse.
-
-    FONTE ÚNICA da prioridade de variante — usada pelo provider pokemontcg.io
-    (`PokemonTcgIoProvider.market_price_usd`) E pelo fallback tcgcsv
-    (`TcgCsvFallbackProvider`). Mantê-la num só lugar é o que garante FIDELIDADE
-    DE VARIANTE entre as duas fontes: o bug v2.18 (Gengar holofoil $146 vs
-    reverseHolofoil $1599, 10× inflado) volta se uma fonte colapsar pra "menor
-    subtype" (o atalho estilo MYP `_min_tcg_usd`). Aqui NUNCA se escolhe pelo
-    preço — escolhe-se pela variante CORRETA segundo o `foil`/reverse do listing
-    e a raridade (holo vs base), e só então se lê o market daquela variante.
-
-    `tcg_prices`: dict {variantName: {"market": float, "low": ..., "mid": ...}}
-      no vocabulário TCGplayer (normal / holofoil / reverseHolofoil /
-      unlimitedHolofoil / 1stEdition*). O caller adapta a forma da fonte pra
-      este vocabulário ANTES de chamar (o tcgcsv mapeia subTypeName→isto).
-    `foil`: True = listing reverse-holo (pokemon_reverse=True); False = não
-      reverse; None = sinal ausente (cache miss antigo / chamada direta).
-    `is_holo`: a carta é intrinsecamente holográfica (Holo Rare etc.) — vem de
-      `_rarity_is_holo(listing_rarity, source_rarity)`.
-
-    Retorna `(variant_name, price_dict)` da variante escolhida, ou `(None, None)`
-    se a variante REQUERIDA (e suas alternativas canônicas) não existir com
-    `market` > 0 → caller pula o card (NUNCA substitui por outro subtype).
-    """
-    if foil is True:
-        # Listing reverse-holo (pokemon_reverse=True) → reverseHolofoil.
-        priority = ["reverseHolofoil", "holofoil", "unlimitedHolofoil", "normal"]
-    elif foil is False:
-        if is_holo:
-            # Holo Rare padrão (não-reverse) → printagem holo base.
-            priority = ["holofoil", "unlimitedHolofoil", "normal", "reverseHolofoil"]
-        else:
-            # Carta base não-holo → normal; reverse por último.
-            priority = ["normal", "holofoil", "unlimitedHolofoil", "reverseHolofoil"]
-    else:
-        # Foil-flag ausente (cache miss antigo ou provider chamado direto).
-        # Preserva a prioridade v2.7 Layer 2.
-        priority = ["holofoil", "normal", "reverseHolofoil", "unlimitedHolofoil"]
-
-    for variant in priority:
-        if variant in _EXCLUDED_TCG_VARIANTS:
-            continue
-        entry = tcg_prices.get(variant)
-        if entry and entry.get("market"):
-            return variant, entry
-    return None, None
+# Escolha de chave de preço: ct_variants.match_reference_variant (correspondência EXATA de
+# edição e acabamento; sem escada de fallback e sem exclusão de 1st Edition).
 
 
 # v2.24 (2026-06-26): razão reverse/normal acima da qual o preço reverseHolofoil
@@ -2051,31 +1963,26 @@ class PokemonTcgIoProvider(PricingProvider):
     def market_price_usd(self, card_name: str, set_code: str,
                          collector_number: str,
                          foil: bool = False,
-                         rarity: Optional[str] = None) -> Optional[float]:
-        # v2.7.1: reset last_tcg_url no início de cada chamada pra evitar
-        # carry-over do card anterior caso este falhe sem set explícito.
-        # v2.8 Layer 4: reset last_variant_used também.
+                         rarity: Optional[str] = None,
+                         first_edition: bool = False) -> Optional[float]:
+        """Preço market (USD) da variante EXATA da oferta (edição + acabamento).
+
+        B1: a chave de preço sai de `ct_variants.match_reference_variant` (sem escada de
+        fallback; 1st Edition é precificada contra 1st Edition). Sem chave compatível devolve
+        None com `last_ref_status` ≠ "" e o motivo em `last_ref_reason` — o chamador NÃO
+        calcula margem. O cache usa `ct_variants.price_cache_key` (edição, reverse, holo,
+        versão da lógica)."""
         self.last_tcg_url = None
         self.last_variant_used = None
         self.last_price_fetched_at = None  # Lote 3: data/hora da referência
-        # v2.13 (valorização): metadados pra score + chase tier. Reset a cada
-        # chamada pra evitar carry-over do card anterior.
         self.last_ptcg_rarity = None
         self.last_set_release_date = None
-        # v2.24: reset normal.market (guard reverse-outlier).
         self.last_normal_market = None
-        # Cache inclui foil pra evitar colisão entre versão normal e RH
-        # do mesmo card (2026-05-11 H2 fix).
-        # v2.20 (2026-06-21): namespace versionado (`pricelogic`). A lógica de
-        # seleção de variante mudou em v2.18 (holo rare → holofoil, não mais
-        # reverseHolofoil inflado), MAS a chave NÃO incluía a raridade — então
-        # entradas cacheadas ANTES do fix (foil=False, preço reverse inflado)
-        # continuariam sendo servidas até o TTL (24h), inclusive no run diário
-        # do GitHub Actions (que NÃO usa --no-cache). Bumpar a versão invalida
-        # de uma vez todas as entradas pré-v2.18 (custo único: 1 refetch). Em
-        # mudanças futuras na lógica de pricing, bumpe PRICE_LOGIC_VERSION.
-        cache_key = (f"pokemontcg:{PRICE_LOGIC_VERSION}:{set_code}:"
-                     f"{collector_number}:{card_name}:foil={foil}")
+        self._reset_ref()
+        foil = bool(foil)
+        pre_holo = ct_variants.rarity_is_holo(rarity)   # só p/ a chave de cache; a decisão final usa a era
+        cache_key = ct_variants.price_cache_key(set_code, collector_number, card_name,
+                                                first_edition, foil, pre_holo)
         cached = self.cache.get_price(cache_key)
         if cached:
             self.last_price_fetched_at = _to_tz_iso(cached.get("fetched_at"))
@@ -2084,26 +1991,24 @@ class PokemonTcgIoProvider(PricingProvider):
             self.last_ptcg_rarity = cached.get("ptcg_rarity")
             self.last_set_release_date = cached.get("set_release_date")
             self.last_normal_market = cached.get("normal_market")
-            return cached["market_usd"]
+            hd = ct_variants.holo_detection(rarity, self.last_ptcg_rarity,
+                                            set_released=self.last_set_release_date)
+            offer = ct_variants.offer_variant(first_edition, foil, hd.is_holo)
+            prices = cached.get("prices") or {}
+            m = ct_variants.match_reference_variant(prices, *offer, era_missing=hd.era_missing)
+            if m.status == ct_variants.OK and m.key == self.last_variant_used:
+                self._set_ref(m, prices, offer, hd.era_missing)
+                return cached["market_usd"]
+            # entrada de cache que não reproduz o casamento atual: ignora e refaz (nunca serve palpite)
 
         card = self._search(card_name, set_code, collector_number)
         if not card:
             return None
-        # v2.7.1: captura tcgplayer.url da response (pode ser ausente em alguns
-        # cards — set defensivo). Setado ANTES de validações restantes pra
-        # garantir que sempre que retornarmos um preço, a url esteja disponível.
         self.last_tcg_url = (card.get("tcgplayer") or {}).get("url")
-        # v2.13 (valorização): rarity oficial pokemontcg.io + data de lançamento
-        # do set. Usados pelo score de valorização e pela coluna Chase Tier.
         self.last_ptcg_rarity = card.get("rarity")
         self.last_set_release_date = (card.get("set") or {}).get("releaseDate")
 
-        # M5 fix (2026-05-12): instrumentação supranumerários.
-        # Detecta quando o match retornado é SIR/SAR/HR/Gold/Rainbow (collector
-        # number > printedTotal do set). Não muda comportamento — só sinaliza
-        # pra operador investigar possíveis falso positivo de pricing inflado.
-        # Padrão observado no MYP scanner irmão: SIR aparecendo como "Comum"
-        # gera margem >100% falsa. CT pode ter caso análogo.
+        # M5 fix (2026-05-12): instrumentação supranumerários (só log).
         try:
             card_num_int = int("".join(c for c in str(card.get("number", "")) if c.isdigit()) or "0")
             printed_total = int((card.get("set") or {}).get("printedTotal") or 0)
@@ -2120,68 +2025,25 @@ class PokemonTcgIoProvider(PricingProvider):
         tcg = card.get("tcgplayer", {}).get("prices", {})
         if not tcg:
             return None
-        # v2.24: âncora `normal.market` pro guard reverse-outlier (capturada ANTES
-        # da seleção de variante — independe de qual variante será escolhida).
+        # v2.24: âncora `normal.market` pro guard reverse-outlier.
         self.last_normal_market = (tcg.get("normal") or {}).get("market")
 
-        # v2.18 (2026-06-20): seleção de variante CIENTE de raridade + reverse.
-        #
-        # PROBLEMA-RAIZ descoberto: pra cartas Pokémon, o sinal `foil` SEMPRE
-        # chegava False — o parse do listing lia `props["mtg_foil"]/["foil"]`
-        # (campos MTG, inexistentes em Pokémon) e IGNORAVA `pokemon_reverse`.
-        # Logo a Holo Rare PADRÃO (pokemon_reverse=False) caía no ramo foil=False
-        # e, sem `normal` na TCGPlayer (holo rare não tem printagem normal),
-        # escorregava pra `reverseHolofoil` — variante reverse, mais rara e CARA.
-        # Inflação sistemática em TODA holo rare vintage:
-        #   Gengar Legendary Collection: holofoil $146.89 vs reverseHolofoil
-        #     $1599.99 (10×!) — exatamente o "Gengar não-foil $1600" load-bearing.
-        #   Claydol EX Hidden Legends: holofoil $14.47 vs reverse $44.95 (+210%).
-        #   Shiftry EX Hidden Legends: holofoil $19.92 vs reverse $42.95 (+116%).
-        # O fix v2.10 (normal-first) só corrigiu NÃO-holo (que têm `normal`);
-        # holo rares continuaram inflando.
-        #
-        # CONSERTO: (1) o parse passa a ler `pokemon_reverse` → reverse holo
-        #   chega como foil=True. (2) Aqui a prioridade vira ciente de raridade:
-        #   - foil=True (reverse holo)      → reverseHolofoil primeiro.
-        #   - foil=False + raridade holo    → holofoil/unlimited (printagem holo
-        #       base); reverseHolofoil POR ÚLTIMO (nunca é o que o seller vende).
-        #   - foil=False + não-holo         → normal; reverse por último.
-        #   - foil=None (legado/direto)     → v2.7 Layer 2.
-        # Empiricamente verificado no data model do CardTrader (2026-06-20):
-        # `pokemon_rarity="Holo Rare"` + `pokemon_reverse=false` = holo padrão
-        # (→ holofoil); `pokemon_reverse=true` = reverse (→ reverseHolofoil).
-        #
-        # EXCLUIR sempre: `1stEditionHolofoil`, `1stEditionNormal` (variantes
-        # raras, inflam 3-10x; operador não vende 1st Ed).
-        # v2.23: seleção de variante extraída pro helper module-level
-        # `select_tcgplayer_variant_price` (fonte ÚNICA compartilhada com o
-        # fallback tcgcsv). Comportamento BYTE-IDÊNTICO ao inline v2.18.
-        is_holo = _rarity_is_holo(rarity, card.get("rarity"))
-        chosen_variant, chosen = select_tcgplayer_variant_price(tcg, foil, is_holo)
-        if not chosen:
-            # Nenhuma variante canônica → return None. Pre-fix tinha fallback
-            # "primeira variante disponível" que pegava 1stEdition em vintage.
-            available = [v for v in tcg.keys() if v not in _EXCLUDED_TCG_VARIANTS]
-            log.debug(
-                f"no canonical variant for {card_name} ({set_code}/{collector_number}): "
-                f"available={list(tcg.keys())} canonical_after_exclusion={available} foil={foil}"
-            )
+        hd = ct_variants.holo_detection(rarity, card.get("rarity"),
+                                        set_released=self.last_set_release_date)
+        offer = ct_variants.offer_variant(first_edition, foil, hd.is_holo)
+        m = ct_variants.match_reference_variant(tcg, *offer, era_missing=hd.era_missing)
+        self._set_ref(m, tcg, offer, hd.era_missing)
+        if m.status != ct_variants.OK:
+            log.debug(f"ref {m.status} {card_name} ({set_code}/{collector_number}) "
+                      f"fe={first_edition} rev={foil}: {m.reason}")
             return None
-
-        log.debug(
-            f"variant chosen: {chosen_variant} for {card_name} "
-            f"({set_code}/{collector_number}) foil={foil} — market=${chosen.get('market')}"
-        )
-        # v2.8 Layer 4: expõe variante usada pra Opportunity.price_variant_used.
-        self.last_variant_used = chosen_variant
+        chosen = tcg[m.key]
+        self.last_variant_used = m.key
         market = chosen.get("market") or 0.0
         low = chosen.get("low") or 0.0
         mid = chosen.get("mid") or 0.0
-        # v2.8 Layer 4: persiste variante no cache (raw payload tem o card dict
-        # completo, mas extrair na leitura significa parsear JSON sempre.
-        # Anotar `_variant_used` direto no card antes de json.dumps é O(1)).
         try:
-            card["_variant_used"] = chosen_variant
+            card["_variant_used"] = m.key
         except (TypeError, AttributeError):
             pass
         self.cache.set_price(cache_key, market, low, mid, card)
@@ -2191,21 +2053,8 @@ class PokemonTcgIoProvider(PricingProvider):
 
 # ── v2.23: helpers tcgcsv (módulo-level, sem rede nos testes via mock) ──────
 
-# subTypeName do tcgcsv → vocabulário de variante TCGplayer usado pela seleção
-# (`select_tcgplayer_variant_price`). O tcgcsv expõe um preço POR subtype; este
-# mapa é o que permite reusar a MESMA escada de variante da pokemontcg.io —
-# garantindo fidelidade (holo rare → holofoil, reverse → reverseHolofoil), NÃO
-# o colapso "menor subtype" do MYP. Subtypes desconhecidos são ignorados.
-TCGCSV_SUBTYPE_TO_VARIANT = {
-    "Normal": "normal",
-    "Holofoil": "holofoil",
-    "Reverse Holofoil": "reverseHolofoil",
-    "Unlimited": "normal",
-    "Unlimited Holofoil": "unlimitedHolofoil",
-    "1st Edition": "1stEditionNormal",
-    "1st Edition Normal": "1stEditionNormal",
-    "1st Edition Holofoil": "1stEditionHolofoil",
-}
+# subTypeName do tcgcsv → chave de variante: ct_variants.TCGCSV_SUBTYPE_TO_VARIANT
+# (único dono do vocabulário; subtype desconhecido é ignorado, nunca inventado).
 
 
 _TCGCSV_KEY_TOKENS = re.compile(r"[A-Z]+|\d+")
@@ -2459,6 +2308,7 @@ class TcgCsvFallbackProvider(PricingProvider):
         # Collection). Indexa cada group; se QUALQUER um falhar, aborta o set
         # (índice parcial perderia o guard de colisão abaixo).
         per_group: list[tuple[dict, dict]] = []
+        group_meta: list[tuple] = []   # (nome do group, publishedOn) — Shadowless / idade do set
         for group_id in group_ids:
             products, f1 = self._get_json(f"{group_id}/products")
             prices, f2 = self._get_json(f"{group_id}/prices")
@@ -2473,6 +2323,8 @@ class TcgCsvFallbackProvider(PricingProvider):
                 self.last_prefill_status = "no_group"
                 return False
             per_group.append(self._index_group(products, prices))
+            g = next((x for x in (self._groups or []) if x.get("groupId") == group_id), {})
+            group_meta.append((g.get("name") or "", g.get("publishedOn")))
 
         from collections import Counter
         key_count = Counter(k for idx, _ in per_group for k in idx)
@@ -2484,12 +2336,17 @@ class TcgCsvFallbackProvider(PricingProvider):
             )
         index: dict[str, dict] = {}
         pid_map: dict[str, dict] = {}
-        for idx, pids in per_group:
+        gname_map: dict[str, str] = {}
+        for (idx, pids), (gname, _pub) in zip(per_group, group_meta):
             for key, variants in idx.items():
                 if key in collisions:
                     continue
                 index[key] = variants
                 pid_map[key] = pids[key]
+                gname_map[key] = gname
+        self.__dict__.setdefault("_group_name", {})[ct_set_code] = gname_map
+        dates = sorted(d for d in (ct_variants._iso(p) for _g, p in group_meta) if d)
+        self.__dict__.setdefault("_set_released", {})[ct_set_code] = dates[0] if dates else None
         self._set_index[ct_set_code] = index
         self._pid_index[ct_set_code] = pid_map
         self.__dict__.setdefault("_fetched_at", {})[ct_set_code] = now_iso()
@@ -2526,8 +2383,8 @@ class TcgCsvFallbackProvider(PricingProvider):
             if pid is None:
                 continue
             sub = r.get("subTypeName")
-            variant = TCGCSV_SUBTYPE_TO_VARIANT.get(sub)
-            if not variant:
+            variant = ct_variants.tcgcsv_variant(sub)
+            if variant == ct_variants.DESCONHECIDO:
                 continue  # subtype desconhecido → ignora (não inventa variante)
             variants_by_pid[pid][variant] = {
                 "market": r.get("marketPrice"),
@@ -2557,10 +2414,14 @@ class TcgCsvFallbackProvider(PricingProvider):
     def market_price_usd(self, card_name: str, set_code: str,
                          collector_number: str,
                          foil: bool = False,
-                         rarity: Optional[str] = None) -> Optional[float]:
-        """Preço market USD do tcgcsv pra um card, com seleção de variante
-        idêntica à pokemontcg.io. None se o set não foi prefillado, o card não
-        está no índice, ou a variante REQUERIDA não existe (nunca substitui)."""
+                         rarity: Optional[str] = None,
+                         first_edition: bool = False) -> Optional[float]:
+        """Preço market USD do tcgcsv p/ a variante EXATA da oferta (B1).
+
+        Chave via ct_variants.match_reference_variant com o NOME DO GROUP (grupo Shadowless
+        nunca é referência) e a data de lançamento do set (publishedOn do group) p/ a
+        detecção de holo. None se o set não foi prefillado ou a carta não está no índice
+        (miss); carta encontrada sem variante compatível → None com last_ref_status."""
         self.last_tcg_url = None
         self.last_variant_used = None
         self.last_ptcg_rarity = None
@@ -2568,45 +2429,41 @@ class TcgCsvFallbackProvider(PricingProvider):
         self.last_price_source = None
         self.last_normal_market = None
         self.last_price_fetched_at = None
+        self._reset_ref()
 
         index = self._set_index.get(set_code)
         if not index:
             return None
-        # v2.26: mesma chave variant-aware do prefill (letras preservadas) —
-        # clean_collector_number aqui colapsava "0H2"→"2" e casava carta errada.
         key = tcgcsv_collector_key(collector_number)
         if not key:
             return None
         variants = index.get(key)
         if not variants:
             return None
-        # v2.24: âncora `normal.market` pro guard reverse-outlier (mesma fonte de
-        # variantes da seleção; None se o tcgcsv não expõe Normal pra este card).
+        foil = bool(foil)
         self.last_normal_market = (variants.get("normal") or {}).get("market")
-
-        # MESMA escada de variante da pokemontcg.io (fonte única compartilhada).
-        is_holo = _rarity_is_holo(rarity)
-        chosen_variant, chosen = select_tcgplayer_variant_price(
-            variants, foil, is_holo
-        )
-        if not chosen:
-            # Variante REQUERIDA ausente no tcgcsv → pula (NUNCA substitui outra).
-            log.debug(
-                f"tcgcsv: variante ausente p/ {card_name} "
-                f"({set_code}/{collector_number}) foil={foil} — "
-                f"disponíveis={list(variants.keys())}"
-            )
-            return None
-        self.last_variant_used = chosen_variant
+        rel = (self.__dict__.get("_set_released") or {}).get(set_code)
+        self.last_set_release_date = rel
+        hd = ct_variants.holo_detection(rarity, set_released=rel)
+        offer = ct_variants.offer_variant(first_edition, foil, hd.is_holo)
+        gname = (self.__dict__.get("_group_name") or {}).get(set_code, {}).get(key)
+        m = ct_variants.match_reference_variant(variants, *offer, group_name=gname,
+                                                era_missing=hd.era_missing)
+        self._set_ref(m, variants, offer, hd.era_missing)
         self.last_price_source = "tcgcsv"
         self.last_price_fetched_at = getattr(self, "_fetched_at", {}).get(set_code)
-        # v2.25: link TCGplayer real (product page) da variante priceada. Antes
-        # ficava None → linha de fallback saía sem [TCG] (furo do contrato de 2
-        # links) e sem chave de join DH. productId vem do MESMO card priceado.
-        pid = (self._pid_index.get(set_code, {}).get(key, {}) or {}).get(chosen_variant)
+        pid_by_variant = self._pid_index.get(set_code, {}).get(key, {}) or {}
+        any_pid = next(iter(pid_by_variant.values()), None)
+        if m.status != ct_variants.OK:
+            # carta encontrada: a página do produto fica p/ o operador conferir
+            if any_pid is not None:
+                self.last_tcg_url = f"https://www.tcgplayer.com/product/{any_pid}"
+            return None
+        self.last_variant_used = m.key
+        pid = pid_by_variant.get(m.key)
         if pid is not None:
             self.last_tcg_url = f"https://www.tcgplayer.com/product/{pid}"
-        market = chosen.get("market") or 0.0
+        market = (variants[m.key].get("market")) or 0.0
         return market if market > 0 else None
 
 
@@ -2629,7 +2486,8 @@ class JustTcgProvider(PricingProvider):
     def market_price_usd(self, card_name: str, set_code: str,
                          collector_number: str,
                          foil: bool = False,
-                         rarity: Optional[str] = None) -> Optional[float]:
+                         rarity: Optional[str] = None,
+                         first_edition: bool = False) -> Optional[float]:
         # TODO: implementar quando assinar JustTCG.
         # Endpoint: GET /cards?name=X&set=Y → prices.tcgplayer.marketPrice
         raise NotImplementedError("JustTCG provider: implementar ao assinar")
@@ -2645,7 +2503,8 @@ class TcgPlayerOfficialProvider(PricingProvider):
     def market_price_usd(self, card_name: str, set_code: str,
                          collector_number: str,
                          foil: bool = False,
-                         rarity: Optional[str] = None) -> Optional[float]:
+                         rarity: Optional[str] = None,
+                         first_edition: bool = False) -> Optional[float]:
         raise NotImplementedError(
             "TCGPlayer API oficial está fechada para novos devs em 2026. "
             "Quando obter credenciais (OAuth2 com public/private key), "
@@ -3115,7 +2974,8 @@ class CheckpointWriter:
                             status: str = "complete",
                             reason: Optional[str] = None,
                             unpriced: int = 0,
-                            note: Optional[str] = None) -> None:
+                            note: Optional[str] = None,
+                            noref: int = 0) -> None:
         if not self.enabled:
             return
         self._write({
@@ -3134,6 +2994,7 @@ class CheckpointWriter:
             "status": status,
             "reason": reason,
             "unpriced": unpriced,
+            "noref": noref,
             "note": note,
         })
         self._sets_written += 1
@@ -3152,6 +3013,11 @@ class CheckpointWriter:
         if self._ensure_open():
             self._write({"_type": "unpriced", **row})
 
+    def write_noref(self, row: dict) -> None:
+        """B1: oferta sem referência compatível — vai pro checkpoint p/ o recovery."""
+        if self._ensure_open():
+            self._write({"_type": "noref", **row})
+
     def write_validation(self, o: "Opportunity") -> None:
         """Lote 3b/3c: resultado da validação per-blueprint, gravado AO VALIDAR.
         Leva a oferta (preço) e a referência contra as quais foi feita — uma
@@ -3168,6 +3034,7 @@ class CheckpointWriter:
             "offer_price_brl": o.ct_price_brl,
             "ref_brl": o.tcg_market_brl,
             "validation_status": o.validation_status,
+            "validation_reason": o.validation_reason,
             "live_price_brl": o.live_price_brl,
             "markup_pct": o.markup_pct,
             "markup_tier": o.markup_tier,
@@ -3251,7 +3118,7 @@ class Scanner:
                  min_price_usd: float = MIN_PRICE_USD,
                  exclude_graded: bool = EXCLUDE_GRADED,
                  shipping_brl_override: float = 0.0,
-                 hub_fee_rate: float = 0.0,
+                 hub_fee_rate: float = 0.06,
                  per_set_timeout_s: float = DEFAULT_PER_SET_TIMEOUT_MIN * 60,
                  ignore_skip_list: bool = False,
                  chase_only: bool = False,
@@ -3428,6 +3295,8 @@ class Scanner:
             seller_username=user.get("username", ""),
             seller_can_sell_via_hub=user.get("can_sell_via_hub", False),
             seller_user_type=user.get("user_type", "private"),
+            first_edition=bool(props.get("first_edition", False)),
+            first_edition_known="first_edition" in props,
             cardtrader_url=f"https://www.cardtrader.com/cards/{raw['blueprint_id']}",
             # 2026-05-16: Schema CT blueprint tem rarity em fixed_properties.pokemon_rarity,
             # NÃO no campo `rarity` raiz (verificado via inspect do bp[0] de sfa).
@@ -3460,6 +3329,60 @@ class Scanner:
         if price_usd_equiv < self.min_price_usd:
             return False
         return True
+
+    def _costs(self) -> Costs:
+        """Custos informativos (ct_economics). `--hub-fee` = taxa do Hub só p/ as colunas
+        LÍQUIDAS de preço CRU (o checkout validado já embute o Hub: compra_inclui_hub=True,
+        nunca contado duas vezes); `--shipping-brl` > 0 substitui o frete de compra fixo.
+        A MARGEM do corte (margem_venda) não depende de nenhum dos dois."""
+        kw = {}
+        hub = getattr(self, "hub_fee_rate", None)
+        if isinstance(hub, (int, float)):
+            kw["hub_fee_rate"] = float(hub)
+        frete = getattr(self, "shipping_brl_override", 0.0)
+        if isinstance(frete, (int, float)) and frete > 0:
+            kw["frete_compra_brl"] = float(frete)
+        return Costs(**kw)
+
+    @staticmethod
+    def _pa(provider, name, typ, default):
+        """Atributo `last_*` do provider com tipo garantido (stubs/mocks nunca vazam)."""
+        v = getattr(provider, name, default)
+        return v if isinstance(v, typ) else default
+
+    @classmethod
+    def _ref_is_noref(cls, provider) -> bool:
+        """Carta ENCONTRADA na fonte mas sem chave compatível / sem preço utilizável."""
+        return cls._pa(provider, "last_ref_status", str, "") in (
+            ct_variants.INCOMPATIVEL, ct_variants.SEM_PRECO)
+
+    def _record_noref(self, exp_code: str, l: "Listing", provider, status: Optional[str] = None,
+                      reason: Optional[str] = None) -> None:
+        """Oferta sem referência COMPATÍVEL: sem margem, sem recomendação; vai p/ a aba
+        "Sem Ref Compatível" (e p/ o checkpoint). NÃO é miss de cobertura. Conta na soma."""
+        pa = self._pa
+        offer = pa(provider, "last_offer_variant", tuple, None) or ct_variants.offer_variant(
+            l.first_edition, bool(l.foil), ct_variants.rarity_is_holo(l.rarity))
+        row = {
+            "set": exp_code, "set_name": l.set_name, "card": l.card_name,
+            "number": l.collector_number, "rarity": l.rarity,
+            "edicao": ct_variants.edition_label(offer[0], pa(provider, "last_divided", bool, False)),
+            "acabamento": ct_variants.FIN_LABELS.get(offer[1], offer[1]),
+            "ct_price_brl": round(l.price_brl, 2), "currency": l.price_currency,
+            "qty": l.quantity, "seller": l.seller_username, "link": l.cardtrader_url,
+            "tcg_url": pa(provider, "last_tcg_url", str, "") or "",
+            "source": pa(provider, "last_price_source", str, "") or pa(provider, "name", str, ""),
+            "motivo": reason if reason is not None else pa(provider, "last_ref_reason", str, ""),
+            "chaves": ",".join(pa(provider, "last_available_keys", list, [])),
+            "status": status or pa(provider, "last_ref_status", str, ""),
+        }
+        self.__dict__.setdefault("noref_rows", []).append(row)
+        self.__dict__.setdefault("_set_accounted", set()).add(l.uid)
+        self.__dict__.setdefault("_noref_uids", set()).add(l.uid)
+        self.stats["listings_sem_ref_compativel"] = self.stats.get("listings_sem_ref_compativel", 0) + 1
+        cp = getattr(self, "_checkpoint", None)
+        if cp is not None:
+            cp.write_noref(row)
 
     def _estimate_shipping_brl(self, listing: Listing, units: int = 1) -> float:
         """Frete em BRL por listing. Default 0 (modelo de consolidacao no Hub depot).
@@ -3596,12 +3519,14 @@ class Scanner:
             try:
                 price = self.tcgcsv.market_price_usd(
                     l.card_name, l.set_code, l.collector_number,
-                    foil=l.foil, rarity=l.rarity,
+                    foil=l.foil, rarity=l.rarity, first_edition=l.first_edition,
                 )
             except Exception as e:  # noqa: BLE001
                 log.debug(f"  tcgcsv pricing falhou {l.card_name}: {e!r}")
                 continue
             if not price or price <= 0:
+                if self._ref_is_noref(self.tcgcsv):
+                    self._record_noref(exp_code, l, self.tcgcsv)
                 continue
             handled.add(l.uid)
             opp = self._build_opportunity(l, price, self.tcgcsv)
@@ -3639,7 +3564,8 @@ class Scanner:
             opps, handled, rescue_status = self._rescue_via_tcgcsv(exp_code, exp_name, pending)
             yield from opps
         self.__dict__.setdefault("_set_accounted", set()).update(handled)
-        left = [l for l in pending if l.uid not in handled]
+        noref_uids = self.__dict__.setdefault("_noref_uids", set())
+        left = [l for l in pending if l.uid not in handled and l.uid not in noref_uids]
         rescued = len(handled)
         if rescued:
             self._set_note = f"tcgcsv_rescue_priced_{rescued}_of_{len(pending)}"
@@ -3871,6 +3797,7 @@ class Scanner:
                     l.card_name, l.set_code, l.collector_number,
                     foil=l.foil,  # H2 fix: foil/reverse-aware variant selection
                     rarity=l.rarity,  # v2.18: holo rare → holofoil; base → normal
+                    first_edition=l.first_edition,  # B1: edição exata
                 )
             except (requests.ConnectionError, requests.Timeout) as e:
                 # v2.9: erros de rede transientes — já foram retried pelo provider.
@@ -3901,6 +3828,10 @@ class Scanner:
             if failed:
                 set_failed.append(l)
                 causes[l.uid] = "failure"
+            elif (not tcg_market or tcg_market <= 0) and self._ref_is_noref(self.pricing):
+                # B1: carta ENCONTRADA sem referência compatível — sem margem, fora da
+                # contagem de misses (não alimenta o corte por cobertura nem a skip-list).
+                self._record_noref(exp_code, l, self.pricing)
             elif not tcg_market or tcg_market <= 0:
                 # v2.13 (frente eficiência): conta miss consecutivo — a fonte
                 # RESPONDEU e não tem a carta (≠ falha). Cap atingido = corte do
@@ -3968,16 +3899,25 @@ class Scanner:
         near-miss ou --chase-only)."""
         tcg_brl = tcg_market * self.usd_brl
         ct_brl = l.price_brl
-        custo_brl = ct_brl * (1.0 + self.hub_fee_rate)
-        margin = (tcg_brl - custo_brl) / tcg_brl
-        below_threshold = margin < self.threshold
+        # D8: a conta de margem mora SÓ em ct_economics. Preço CRU (per-expansion):
+        # compra_inclui_hub=False. O corte compara com margem_venda (sobre a VENDA).
+        econ = compute_economics(tcg_brl, ct_brl, compra_inclui_hub=False, costs=self._costs())
+        if not econ.tem_margem:
+            self._record_noref(
+                getattr(l, "set_code", ""), l, source_provider,
+                status="MARGEM_NAO_CALCULAVEL",
+                reason=f"margem não calculável: {econ.sem_margem_motivo}")
+            return None
+        margin = econ.margem_venda
+        below_threshold = not econ.passa_corte(self.threshold)
         if below_threshold and not self.keep_all_priced:
             # Modo --opportunities-only (legado): descarta o near-miss.
             return None
 
         self.stats["tcg_price_found"] += 1
-        shipping_brl = self._estimate_shipping_brl(l)
-        net_margin = (tcg_brl - custo_brl - shipping_brl) / tcg_brl
+        shipping_brl = self._costs().frete_compra_brl or 0.0
+        net_margin = (econ.margem_liquida_venda if econ.margem_liquida_venda is not None
+                      else econ.margem_venda)
 
         if below_threshold:
             # v2.22: precificado mas abaixo do threshold. Persistido pro XLSX
@@ -3998,7 +3938,11 @@ class Scanner:
         # v2.14 + v2.18: flag de baixa confiança de variante. Listing NÃO-foil
         # que só achou preço numa variante metálica premium (holofoil/
         # unlimitedHolofoil) sendo NÃO-holo (o caso Gengar não-foil → $1600).
-        is_holo_card = _rarity_is_holo(l.rarity, ptcg_rarity)
+        set_release = getattr(source_provider, "last_set_release_date", None) or ""
+        if not isinstance(set_release, str):
+            set_release = ""
+        is_holo_card = ct_variants.rarity_is_holo(l.rarity, ptcg_rarity,
+                                                  set_released=set_release or None)
         variant_low_conf = (
             l.foil is False
             and not is_holo_card
@@ -4013,7 +3957,6 @@ class Scanner:
         variant_low_conf = variant_low_conf or _reverse_nonholo_market_outlier(
             variant_used, is_holo_card, tcg_market, normal_market
         )
-        set_release = getattr(source_provider, "last_set_release_date", None) or ""
         rarity_for_tier = ptcg_rarity or l.rarity
         chase_tier = classify_chase_tier(rarity_for_tier)
         val_score, val_note = compute_valorization(
@@ -4029,7 +3972,7 @@ class Scanner:
             tcg_market_brl=tcg_brl,
             ct_price_brl=ct_brl,
             margin_pct=margin,
-            margin_brl=tcg_brl - custo_brl,
+            margin_brl=econ.lucro_bruto,
             estimated_shipping_brl=shipping_brl,
             net_margin_pct=net_margin,
             tcg_url=tcg_url,
@@ -4043,7 +3986,23 @@ class Scanner:
             below_threshold=below_threshold,
             price_fetched_at=(lambda v: v if isinstance(v, str) else "")(
                 getattr(source_provider, "last_price_fetched_at", None)),
+            edition=self._opp_edition(l, source_provider),
+            finish=self._pa(source_provider, "last_offer_variant", tuple, None)[1]
+            if self._pa(source_provider, "last_offer_variant", tuple, None)
+            else (ct_variants.FIN_REVERSE if l.foil else
+                  ct_variants.FIN_HOLO if is_holo_card else ct_variants.FIN_NORMAL),
+            ref_compatible=self._pa(source_provider, "last_ref_exact", bool, False),
         )
+
+    def _opp_edition(self, l: "Listing", provider) -> str:
+        """Edição da linha: 1st (oferta 1st), ED_NONE (carta sem divisão de edição) ou unl."""
+        if l.first_edition:
+            return ct_variants.ED_1ST
+        divided = self._pa(provider, "last_divided", bool, True)
+        key = self._pa(provider, "last_ref_key", str, None)
+        if key is not None and not divided:
+            return ct_variants.ED_NONE
+        return ct_variants.ED_UNL
 
     def _tcgcsv_can_fallback(self) -> bool:
         """v2.23: True se o fallback tcgcsv está habilitado E disponível.
@@ -4110,6 +4069,8 @@ class Scanner:
         self.set_outcomes: list[dict] = []   # Lote 3: desfecho de cada set
         self.unpriced_rows: list[dict] = []  # Lote 3: listings sem preço (aba "Sem preço")
         self.interrupted = False             # Lote 3c: Ctrl-C no meio do run
+        self.noref_rows: list[dict] = []     # B1: ofertas sem referência compatível
+        self.stats.setdefault("listings_sem_ref_compativel", 0)
         for idx, exp in enumerate(expansions, 1):
             exp_code = exp.get("code", "")
             elapsed_min = (time.monotonic() - run_start) / 60.0
@@ -4136,6 +4097,7 @@ class Scanner:
             self._set_status, self._set_reason = "complete", None
             self._set_unpriced, self._set_note, self._set_total = 0, None, 0
             self._set_all, self._set_accounted = [], set()
+            self._noref_uids = set()
             try:
                 # v2.6: itera o generator e escreve cada Opportunity no checkpoint
                 # ASSIM QUE for yielded. Antes era `opps.extend(scan_expansion(exp))`
@@ -4182,6 +4144,7 @@ class Scanner:
                 "status": self._set_status, "reason": self._set_reason,
                 "unpriced": self._set_unpriced, "total": self._set_total,
                 "note": self._set_note,
+                "noref": sum(1 for r in self.noref_rows if r["set"] == exp_code),
             })
             # v2.6: emite set_complete (agora para TODO desfecho) com DIFFs
             if checkpoint and checkpoint.enabled and stats_pre is not None:
@@ -4200,6 +4163,7 @@ class Scanner:
                     reason=self._set_reason,
                     unpriced=self._set_unpriced,
                     note=self._set_note,
+                    noref=sum(1 for r in self.noref_rows if r["set"] == exp_code),
                 )
             if self.interrupted:
                 # sets que nem começaram: operational_failure "não iniciado"
@@ -4266,6 +4230,14 @@ class Scanner:
         n = len(getattr(self, "unpriced_rows", []))
         if n:
             lines.append(f"{n} listings sem preço — ver aba 'Sem preço' do XLSX")
+        nr = len(getattr(self, "noref_rows", []))
+        if nr:
+            por_set = {}
+            for r in self.noref_rows:
+                por_set[r["set"]] = por_set.get(r["set"], 0) + 1
+            lines.append(f"{nr} ofertas SEM REFERÊNCIA COMPATÍVEL (edição/acabamento sem preço; sem "
+                         f"margem, nada a recomendar) — aba 'Sem Ref Compatível': " +
+                         ", ".join(f"{k} ({v})" for k, v in sorted(por_set.items())))
         return lines
 
     def _enrich_validation(self, o: "Opportunity", listings) -> None:
@@ -4296,11 +4268,25 @@ class Scanner:
                           or p.get("foil", False))
             return cond == o.listing.condition and is_rev == bool(o.listing.foil)
 
-        seller_matches = [
-            l for l in listings
-            if (l.get("user") or {}).get("username") == seller
-            and _variant_matches(l)
-        ]
+        def _props(listing_dict) -> dict:
+            return listing_dict.get("properties_hash") or listing_dict.get("properties") or {}
+
+        # B1: mesma EDIÇÃO além de condição+reverse. Oferta de outra edição NUNCA valida.
+        same_variant = [l for l in listings
+                        if (l.get("user") or {}).get("username") == seller and _variant_matches(l)]
+        # sem a chave `first_edition` no payload per-blueprint não há como confirmar a edição
+        # (quando a oferta é 1st, ou quando a chave veio no scan e sumiu aqui)
+        needs_key = o.listing.first_edition or o.listing.first_edition_known
+        unconfirmable = [l for l in same_variant if "first_edition" not in _props(l)] if needs_key else []
+        seller_matches = [l for l in same_variant
+                          if ("first_edition" in _props(l)
+                              and bool(_props(l)["first_edition"]) == bool(o.listing.first_edition))
+                          or ("first_edition" not in _props(l) and not needs_key)]
+        if not seller_matches and unconfirmable:
+            o.validation_status = "NAO_CONFIRMAVEL"
+            o.validation_reason = ("endpoint per-blueprint não traz `first_edition`: a edição "
+                                   "da oferta não pôde ser confirmada (não validada por oferta de outra edição)")
+            return
         match = (min(seller_matches, key=lambda l: l.get("price_cents", float("inf")))
                  if seller_matches else None)
         if not match:
@@ -4351,11 +4337,12 @@ class Scanner:
         # hub_fee_rate default 0.0, custo = live_brl → margens REAIS são BRUTAS
         # `(tcg − live)/tcg`. Operador soma Hub fee/frete/cartão/IOF por fora.
         # (--hub-fee 0.06 reembute os 6% históricos.) Alinha com postprocess.
-        hub_fee_brl = live_brl * self.hub_fee_rate
-        custo_real = live_brl + hub_fee_brl
-        o.real_margin_pct = (o.tcg_market_brl - custo_real) / o.tcg_market_brl
-        o.real_net_margin_pct = (o.tcg_market_brl - custo_real - o.estimated_shipping_brl) / o.tcg_market_brl
-        o.real_lucro_brl = o.tcg_market_brl - custo_real - o.estimated_shipping_brl
+        # D8: preço LIVE do checkout JÁ embute o Hub (compra_inclui_hub=True) — nunca 2×.
+        econ = compute_economics(o.tcg_market_brl, live_brl, compra_inclui_hub=True,
+                                 costs=self._costs())
+        o.real_margin_pct = econ.margem_venda
+        o.real_net_margin_pct = econ.margem_liquida_venda
+        o.real_lucro_brl = econ.lucro_liquido
 
     def validate_per_blueprint(self, opps: list[Opportunity],
                                top_n: Optional[int] = None,
@@ -4479,6 +4466,7 @@ def apply_validation_record(o: "Opportunity", rec: dict,
     o.validated_at = rec.get("validated_at") or ""
     o.validation_reused = bool(rec.get("reused", False)) if reused is None else reused
     o.validation_status = rec.get("validation_status", o.validation_status)
+    o.validation_reason = rec.get("validation_reason") or ""
     o.live_price_brl = rec.get("live_price_brl")
     o.markup_pct = rec.get("markup_pct")
     o.markup_tier = rec.get("markup_tier")
@@ -4519,8 +4507,9 @@ def apply_validation_filters(opps: list[Opportunity], min_net_margin: float):
 
 def export_xlsx(opportunities: list[Opportunity], stats: dict,
                 out_path: Path, usd_brl: float, eur_brl: float,
-                threshold: float, hub_fee_rate: float = 0.0,
-                unpriced: Optional[list] = None) -> Path:
+                threshold: float, hub_fee_rate: float = 0.06,
+                unpriced: Optional[list] = None,
+                noref: Optional[list] = None) -> Path:
     wb = Workbook()
 
     # Aba 1: Oportunidades
@@ -4564,6 +4553,9 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         # Lote 3c: quando a validação per-blueprint foi feita e se foi
         # reaproveitada de um run interrompido (APPEND no fim).
         "Validado em", "Validação",
+        # B1: variante da oferta/referência (contrato com o postprocess). `Ref Compatível`
+        # = Sim só com Match OK de par IDÊNTICO ao da oferta; a chave usada = coluna `Variant`.
+        "Edição", "Acabamento", "Ref Compatível", "Motivo Validação",
     ]
     ws.append(headers)
 
@@ -4612,6 +4604,11 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
             opp.validated_at or "",
             ("reaproveitada" if opp.validation_reused
              else "nova" if opp.validated_at else ""),
+            {ct_variants.ED_1ST: "1st Edition", ct_variants.ED_UNL: "Unlimited",
+             ct_variants.ED_NONE: ct_variants.ED_NONE_LABEL}.get(opp.edition, ""),
+            ct_variants.FIN_LABELS.get(opp.finish, ""),
+            "Sim" if opp.ref_compatible else "Não",
+            opp.validation_reason or "",
         ])
 
     # ─── Formatação ───
@@ -4700,6 +4697,20 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
 
     # Lote 3: listings SEM preço (sem cobertura / falha operacional / não
     # alcançados) — nada some em silêncio; aba só existe quando há linhas.
+    if noref:
+        wsn = wb.create_sheet("Sem Ref Compatível")
+        wsn.append(["Card Name", "Set", "Nº", "Rarity", "Edição", "Acabamento",
+                    "Scan R$ (raw)", "Moeda", "Qtd", "Seller", "Link CardTrader", "Link TCG",
+                    "Fonte Preço", "Motivo", "Chaves disponíveis", "Status Ref"])
+        for r in noref:
+            wsn.append([r.get("card"), f"{r.get('set_name')} ({r.get('set')})", r.get("number"),
+                        r.get("rarity"), r.get("edicao"), r.get("acabamento"),
+                        r.get("ct_price_brl"), r.get("currency"), r.get("qty"), r.get("seller"),
+                        r.get("link"), r.get("tcg_url"), r.get("source"), r.get("motivo"),
+                        r.get("chaves"), r.get("status")])
+        for cell in wsn[1]:
+            cell.fill = header_fill
+            cell.font = header_font
     if unpriced:
         ws3 = wb.create_sheet("Sem preço")
         ws3.append(["Set", "Nome do set", "Carta", "Nº", "CT R$", "Seller",
@@ -4721,7 +4732,7 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
     ws2.append(["eur_brl_rate", round(eur_brl, 4)])
     ws2.append(["threshold_margin", f"{threshold:.0%}"])
     ws2.append(["hub_fee_rate", f"{hub_fee_rate:.0%}"])
-    ws2.append(["margin_basis", "BRUTA (sem taxa)" if hub_fee_rate <= 0 else f"líquida (+{hub_fee_rate:.0%} hub fee)"])
+    ws2.append(["margin_basis", "margem sobre a VENDA (ct_economics); Hub só nas colunas líquidas"])
     ws2.append(["scanned_at", now_iso()])
     ws2.column_dimensions["A"].width = 30
     ws2.column_dimensions["B"].width = 20
@@ -4815,12 +4826,11 @@ def parse_args():
                    help="Frete fixo per-listing em BRL (default 0 — modelo de "
                         "consolidacao no Hub depot, frete dilui per-card). "
                         "Override pra simular envio direto: ex --shipping-brl 28.84")
-    p.add_argument("--hub-fee", type=float, default=0.0,
-                   help=("v2.12: DEFAULT 0.0 — margem reportada e BRUTA "
-                         "(custo = preco do site, SEM taxa). Operador calcula "
-                         "Hub fee/frete/cartao/IOF por fora, manualmente. "
-                         "Para reembutir a taxa antiga de 6%%, passe --hub-fee 0.06 "
-                         "(custo real = live_brl x (1 + hub_fee))."))
+    p.add_argument("--hub-fee", type=float, default=0.06,
+                   help=("B1/D8: taxa do Hub (default 0.06) usada SÓ nas colunas LÍQUIDAS "
+                         "informativas de preço CRU (ct_economics). A margem do corte "
+                         "(--threshold) é margem sobre a VENDA e NÃO depende desta flag; o preço "
+                         "validado no checkout já embute o Hub (nunca contado duas vezes)."))
     # v2.4: per-set timeout + skip-list controls
     p.add_argument("--per-set-timeout", type=float, default=DEFAULT_PER_SET_TIMEOUT_MIN,
                    help=(f"v2.4: wall-clock timeout per set (minutos). Default "
@@ -5230,11 +5240,8 @@ def main():
     n_real_opps = sum(1 for o in opps if not getattr(o, "below_threshold", False))
     log.info(f"Scan completo em {dt:.1f}s — {n_real_opps} oportunidades ≥ {args.threshold:.0%} "
              f"({len(opps) - n_real_opps} precificadas abaixo do threshold, persistidas como near-miss)")
-    if args.hub_fee > 0:
-        log.info(f"Hub fee aplicado no recalc REAL: {args.hub_fee:.0%} (custo = site_price × {1 + args.hub_fee:.2f})")
-    else:
-        log.info("Margem BRUTA (--hub-fee 0.0): custo = preço do site, SEM taxa. "
-                 "Operador calcula Hub fee/frete/cartão/IOF por fora (v2.12).")
+    log.info(f"Margem do corte = margem sobre a VENDA (ct_economics): (ref − compra)/ref, sem taxa. "
+             f"Hub {args.hub_fee:.0%} só nas colunas líquidas de preço cru (checkout validado já embute o Hub).")
 
     # v2.22 (2026-06-22): sob o contrato de entrega (keep_all_priced), os
     # near-misses (below_threshold=True) NÃO podem ser descartados pelos
@@ -5289,7 +5296,8 @@ def main():
     export_xlsx(opps, scanner.stats, out_path,
                 usd_brl=scanner.usd_brl, eur_brl=scanner.eur_brl,
                 threshold=args.threshold, hub_fee_rate=args.hub_fee,
-                unpriced=getattr(scanner, "unpriced_rows", None))
+                unpriced=getattr(scanner, "unpriced_rows", None),
+                noref=getattr(scanner, "noref_rows", None))
 
     # Top 5 por margem líquida REAL se validado, senão líquida estimada
     def net_key(o: Opportunity) -> float:

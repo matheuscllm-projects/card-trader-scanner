@@ -24,6 +24,12 @@ DESCONHECIDO = "desconhecido"
 ED_1ST, ED_UNL, ED_NONE = "1st", "unl", ""  # ED_NONE = carta sem divisao de edicao
 FIN_NORMAL, FIN_HOLO, FIN_REVERSE = "normal", "holo", "reverse"
 
+# Rotulos exibidos nas colunas `Edição` / `Acabamento` do XLSX do scanner (o postprocess le
+# daqui). ED_NONE_LABEL = valor PROPRIO p/ carta sem divisao de edicao (moderno, EX, e-Card):
+# distinto de "Unlimited" e da celula vazia (= "nao informada").
+ED_NONE_LABEL = "Sem divisão de edição"
+FIN_LABELS = {FIN_NORMAL: "Normal", FIN_HOLO: "Holo", FIN_REVERSE: "Reverse"}
+
 # chave pokemontcg.io -> (edicao, acabamento). So grafias vistas em dado real
 # (pokemontcg.io neo1/ex1; "1stEditionNormal" nunca apareceu: fora).
 PTCG_KEY_TO_CANON = {
@@ -191,6 +197,28 @@ def _usable(prices: dict) -> dict:
     """{chave: (edicao, acabamento)} so das chaves conhecidas com market valido."""
     return {k: PTCG_KEY_TO_CANON[k] for k, v in (prices or {}).items()
             if k in PTCG_KEY_TO_CANON and _market(v) is not None}
+
+
+def edition_label(edicao: str, divided: bool) -> str:
+    """Rotulo da coluna `Edição`. 1st e sempre "1st Edition" (atributo da oferta); a oferta
+    nao-1st e "Unlimited" so se a carta tem divisao de edicao, senao ED_NONE_LABEL."""
+    if edicao == ED_1ST:
+        return _ED_LABEL[ED_1ST]
+    return _ED_LABEL[ED_UNL] if divided else ED_NONE_LABEL
+
+
+def is_divided(prices: dict) -> bool:
+    """A carta tem chave de edicao (1stEdition*/unlimited*) entre as chaves conhecidas?"""
+    return any(PTCG_KEY_TO_CANON[k][0] for k in (prices or {}) if k in PTCG_KEY_TO_CANON)
+
+
+def is_exact(match: "Match", edicao: str, acabamento: str) -> bool:
+    """`Ref Compatível` = Sim: Match OK cujo par e IDENTICO ao da oferta (sem rotulo de
+    edicao so vale como Unlimited, e so em carta sem divisao)."""
+    if match.status != OK or match.canon is None:
+        return False
+    ed, fin = match.canon
+    return fin == acabamento and (ed == edicao or (ed == ED_NONE and edicao == ED_UNL))
 
 
 def available_keys(prices: dict) -> list[str]:

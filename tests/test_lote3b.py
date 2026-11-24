@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
 import requests
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -126,7 +127,7 @@ def test_mass_failure_does_not_drop_a_priced_listing(tmp_path, monkeypatch):
     listings = _cards(25)
     scanner = _scanner_with({}, _tcgcsv_for([]), listings, tcgcsv_fallback=False, max_misses=0)
 
-    def pricing(card_name, set_code, num, foil=False, rarity=None):
+    def pricing(card_name, set_code, num, foil=False, rarity=None, first_edition=False):
         if int(num[:3]) <= 19:
             raise requests.Timeout("500 persistente")
         return 100.0
@@ -214,7 +215,7 @@ def test_validation_results_are_checkpointed_and_resumed_only_with_the_flag(tmp_
     cp2.close()
     called = sorted(c.args[0] for c in s2.ct.list_listings_by_blueprint.call_args_list)
     assert called == [2, 3], called  # só a 1 (já validada) foi reaproveitada
-    assert run2[0].live_price_brl == 100.0 and run2[0].real_net_margin_pct == 0.5
+    assert run2[0].live_price_brl == 100.0 and run2[0].real_net_margin_pct == pytest.approx(0.4975)  # D8: frete de compra R$0,50 fixo
     assert run2[0].validation_reused is True
 
 

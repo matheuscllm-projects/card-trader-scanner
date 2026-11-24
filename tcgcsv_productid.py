@@ -35,9 +35,9 @@ _GALLERY_NUM_RE = re.compile(r"^(?:TG|GG)\d+", re.IGNORECASE)
 # `cardtrader_scanner.log` no cwd e mexe no logging raiz. É tolerável aqui (só
 # acontece com `--doubleholo` sem `--no-pid-resolve`); refatorar pra import-safe
 # exigiria mexer no setup de logging do scanner (fora do escopo da coluna DH).
+import ct_variants  # noqa: E402
 from cardtrader_scanner import (
     TCGCSV_BASE,
-    TCGCSV_SUBTYPE_TO_VARIANT,
     TCGCSV_USER_AGENT,
     clean_collector_number,
     resolve_tcgcsv_group_ids,
@@ -136,8 +136,8 @@ class ProductIdResolver:
             pid = r.get("productId")
             if pid is None:
                 continue
-            variant = TCGCSV_SUBTYPE_TO_VARIANT.get(r.get("subTypeName"))
-            if variant:
+            variant = ct_variants.tcgcsv_variant(r.get("subTypeName"))
+            if variant != ct_variants.DESCONHECIDO:
                 variants_by_pid[pid].add(variant)
 
         vpid: dict[str, dict] = defaultdict(dict)

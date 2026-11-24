@@ -76,7 +76,8 @@ def test_row_with_both_links_has_no_missing_flag():
 
 def test_chase_tier_patterns_parity_scanner_vs_postprocess():
     import ct_chase
-    assert sc.CHASE_TIER_PATTERNS == ct_chase.CHASE_TIER_PATTERNS
+    assert not hasattr(sc, "CHASE_TIER_PATTERNS")  # B1: o scanner importa do ct_chase (sem copia)
+    assert sc.classify_chase_tier is ct_chase.classify_chase_tier
     assert pp.classify_chase_tier is ct_chase.classify_chase_tier  # sem copia no postprocess
 
 

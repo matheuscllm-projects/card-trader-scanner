@@ -38,7 +38,6 @@ from cardtrader_scanner import (  # noqa: E402
     Listing,
     TcgCsvFallbackProvider,
     resolve_tcgcsv_group_id,
-    select_tcgplayer_variant_price,
 )
 
 
@@ -139,6 +138,17 @@ def test_b_no_match_returns_none():
     assert gid is None, gid
 
 
+import ct_variants  # noqa: E402
+
+
+def select_tcgplayer_variant_price(prices, foil, is_holo, first_edition=False):
+    """Atalho de teste sobre ct_variants.match_reference_variant (B1: a escada antiga de
+    variante foi removida; a escolha é por correspondência EXATA de edição+acabamento)."""
+    offer = ct_variants.offer_variant(first_edition, bool(foil), is_holo)
+    m = ct_variants.match_reference_variant(prices, *offer)
+    return (m.key, prices[m.key]) if m.status == ct_variants.OK else (None, None)
+
+
 # ───────────────── (c) FIDELIDADE DE VARIANTE (a regressão Gengar) ───────────
 # Gengar: Holofoil $146.89 vs Reverse Holofoil $1599.99 (10×). Um listing
 # não-reverse de uma holo rare DEVE casar holofoil; um pokemon_reverse=True DEVE
@@ -237,10 +247,8 @@ def test_d_provider_skips_when_variant_missing():
 
 
 def test_d_never_substitutes_another_subtype():
-    """Carta base NÃO-holo, listing não-reverse: só Reverse Holofoil disponível.
-    A escada non-holo é [normal, holofoil, unlimitedHolofoil, reverseHolofoil] —
-    reverse é último recurso, mas existe. Provamos o caso onde nem isso há:
-    apenas um subtype 1stEdition (EXCLUÍDO) → None (não vaza 1st Ed inflado)."""
+    """B1: oferta Unlimited NÃO-holo com só chave 1stEditionHolofoil → None (correspondência
+    exata de edição E acabamento: 1st Ed nunca precifica Unlimited, nem holo uma normal)."""
     variant, entry = select_tcgplayer_variant_price(
         {"1stEditionHolofoil": {"market": 999.0}},
         foil=False, is_holo=False
@@ -307,7 +315,7 @@ def _scanner_with(pokemontcg_prices, tcgcsv_provider, listings,
     pricing.last_set_release_date = None
     pricing.last_price_source = None
 
-    def price_fn(card_name, set_code, num, foil=False, rarity=None):
+    def price_fn(card_name, set_code, num, foil=False, rarity=None, first_edition=False):
         return pokemontcg_prices.get((set_code, num))
     pricing.market_price_usd.side_effect = price_fn
     s.pricing = pricing

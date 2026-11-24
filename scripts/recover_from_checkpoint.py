@@ -83,6 +83,7 @@ def parse_checkpoint(checkpoint_path: Path) -> tuple[list[Opportunity], dict, di
     header: dict = {}
     sets_complete: list[dict] = []
     unpriced: list[dict] = []        # Lote 3b: linhas "Sem preço"
+    noref: list[dict] = []           # B1: linhas "Sem Ref Compatível"
     validations: dict = {}           # Lote 3b: validação per-blueprint (última vence)
     scan_complete: dict = {}
     bad_lines = 0
@@ -115,6 +116,8 @@ def parse_checkpoint(checkpoint_path: Path) -> tuple[list[Opportunity], dict, di
                 unpriced.append({k: v for k, v in obj.items() if k != "_type"})
             elif typ == "validation":
                 validations[f"{obj.get('product_id')}:{obj.get('seller')}"] = obj
+            elif typ == "noref":
+                noref.append({k: v for k, v in obj.items() if k != "_type"})
             elif typ == "validation_complete":
                 continue   # Lote 3c: marcador de fim da validação (sem dado)
             elif typ == "set_progress":
@@ -142,6 +145,7 @@ def parse_checkpoint(checkpoint_path: Path) -> tuple[list[Opportunity], dict, di
             applied += 1
     stats_summary = {
         "unpriced": unpriced,
+        "noref": noref,
         "validations_applied": applied,
         "total_lines": total_lines,
         "bad_lines": bad_lines,
@@ -180,6 +184,8 @@ def _reconstruct_opportunity(d: dict) -> Opportunity:
         seller_user_type=listing_d["seller_user_type"],
         cardtrader_url=listing_d["cardtrader_url"],
         rarity=listing_d.get("rarity", ""),
+        first_edition=bool(listing_d.get("first_edition", False)),
+        first_edition_known=bool(listing_d.get("first_edition_known", False)),
     )
     return Opportunity(
         listing=listing,
@@ -219,6 +225,12 @@ def _reconstruct_opportunity(d: dict) -> Opportunity:
         price_source=d.get("price_source"),
         price_fetched_at=d.get("price_fetched_at", ""),
         below_threshold=d.get("below_threshold", False),
+        validated_at=d.get("validated_at", "") or "",
+        validation_reused=bool(d.get("validation_reused", False)),
+        edition=d.get("edition", "unl"),
+        finish=d.get("finish", "normal"),
+        ref_compatible=bool(d.get("ref_compatible", False)),
+        validation_reason=d.get("validation_reason", "") or "",
     )
 
 
@@ -332,6 +344,7 @@ def main() -> int:
         eur_brl=fx_eur_brl,
         threshold=args.threshold,
         unpriced=summary.get("unpriced") or None,
+        noref=summary.get("noref") or None,
     )
     log.info(
         f"✓ Recovered {len(opps)} opportunities across "

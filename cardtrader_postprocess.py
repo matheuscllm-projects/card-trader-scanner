@@ -1117,7 +1117,10 @@ PC_DIVERGENCE_RATIO = 0.30
 # ex. "1st Edition"/"Unlimited"). Nao ha segunda copia nem lista de sets com 1st Edition aqui:
 # quem sabe se o set tem divisao de edicao e o scanner, que emite a coluna `Edição`.
 _ED_VOCAB = {**{lbl.lower(): k for k, lbl in ct_variants._ED_LABEL.items() if k != ct_variants.ED_NONE},
-             ct_variants.ED_1ST: ct_variants.ED_1ST, ct_variants.ED_UNL: ct_variants.ED_UNL}
+             ct_variants.ED_1ST: ct_variants.ED_1ST, ct_variants.ED_UNL: ct_variants.ED_UNL,
+             # carta SEM divisao de edicao (rotulo proprio do scanner): para a pagina PC e a
+             # pagina nao-1st, ou seja, "unl". Celula vazia continua "nao informada".
+             ct_variants.ED_NONE_LABEL.lower(): ct_variants.ED_UNL}
 
 
 def _row_edition(row):
