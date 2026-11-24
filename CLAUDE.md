@@ -733,6 +733,13 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
   reavaliada (um `no_coverage` da pokemontcg.io não diz nada sobre o tcgcsv); o log avisa quais sets
   foram reavaliados por isso. `--no-tcgcsv-fallback` só tem efeito com `--provider pokemontcg` (com o padrão
   tcgcsv não há fallback tcgcsv a desligar).
+- **B1m (validação per-blueprint):** a API real devolve o preço como `price: {cents, currency}`; a validação lê
+  esse formato (o antigo `price_cents`/`price_currency` solto só como fallback). Preço live ausente, zero ou
+  não finito = status `PRECO_INVALIDO`: a linha segue no XLSX, nunca vira `VALIDATED_REAL`/markup, e o postprocess
+  a manda a REVISAR com "preço não validado" (nunca "sem referência"). O processo sai com **código 3** quando há
+  candidatos validados e NENHUM tem preço live válido (aviso de que a validação não funcionou). Set cujas ofertas
+  ficaram sem referência compatível/ambígua (a fonte TEM a carta) é `complete_with_unpriced`, não `no_coverage`:
+  não vai para a skip-list.
 - **Contadores:** o resumo e o rodapé contam por fonte (derivados das linhas, não de variáveis soltas),
   incluindo quantas linhas saíram Inferido por set.
 
