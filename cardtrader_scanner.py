@@ -2986,7 +2986,8 @@ class CheckpointWriter:
 
     def write_set_complete(self, set_code: str, set_name: str,
                             per_set_stats: dict, elapsed_s: float,
-                            abort_reason: Optional[str] = None) -> None:
+                            abort_reason: Optional[str] = None,
+                            note: Optional[str] = None) -> None:
         if not self.enabled:
             return
         self._write({
@@ -3002,6 +3003,7 @@ class CheckpointWriter:
             # Checkpoints antigos não têm estes campos → leitores tratam como complete.
             "status": "aborted" if abort_reason else "complete",
             "abort_reason": abort_reason,
+            "note": note,
         })
         self._sets_written += 1
 
@@ -3322,6 +3324,7 @@ class Scanner:
         exp_code = expansion.get("code", "")
         exp_name = expansion.get("name", "")
         self._set_abort_reason: Optional[str] = None  # Lote 1: motivo se abortar
+        self._set_note: Optional[str] = None  # Lote 2: ex.: resgate tcgcsv parcial
         log.info(f"→ Scan: {exp_name} ({exp_code}) [id={exp_id}]")
         # v2.4: marca início pra wall-clock timeout no pricing loop
         set_start = time.monotonic()
@@ -3567,6 +3570,31 @@ class Scanner:
                             exp_code, exp_name, list(best_by_uid.values())
                         )
                         if fb_opps:
+                            self.stats["expansions_scanned"] += 1
+                            yield from fb_opps
+                            return
+                    elif (set_tcg_hits > 0 and i < total_listings
+                            and self._tcgcsv_can_fallback()):
+                        # Lote 2 (#6, versão restrita): houve hits na pokemontcg.io
+                        # mas o resto do set não tem cobertura (ex.: subset Shiny
+                        # Vault, nomes vintage). Em vez de abortar, o tcgcsv assume
+                        # os misses até aqui + os listings que ainda sobram. Só se
+                        # sobram listings (i < total) e existe groupId; senão cai
+                        # no abort de sempre. Fonte rotulada por linha (price_source).
+                        rest = list(best_by_uid.values())[i:]
+                        fb_opps = self._price_set_via_tcgcsv(
+                            exp_code, exp_name, set_misses + rest
+                        )
+                        if fb_opps:
+                            log.info(
+                                f"  🛟 {exp_code}: corte por {set_consecutive_misses} misses "
+                                f"seguidos em {i}/{total_listings} — tcgcsv precificou "
+                                f"{len(fb_opps)} dos {len(set_misses) + len(rest)} restantes"
+                            )
+                            self._set_note = (
+                                f"tcgcsv_rescue_after_misses_at_{i}_of_{total_listings}"
+                                f"_priced_{len(fb_opps)}"
+                            )
                             self.stats["expansions_scanned"] += 1
                             yield from fb_opps
                             return
@@ -3823,6 +3851,7 @@ class Scanner:
             set_start = time.monotonic()
             opps_pre_count = len(opps)
             self._set_abort_reason = None
+            self._set_note = None
             try:
                 # v2.6: itera o generator e escreve cada Opportunity no checkpoint
                 # ASSIM QUE for yielded. Antes era `opps.extend(scan_expansion(exp))`
@@ -3869,6 +3898,7 @@ class Scanner:
                     per_set_stats=per_set_stats,
                     elapsed_s=time.monotonic() - set_start,
                     abort_reason=getattr(self, "_set_abort_reason", None),
+                    note=getattr(self, "_set_note", None),
                 )
         # Ordena por margem bruta desc (maior oportunidade primeiro)
         opps.sort(key=lambda o: o.margin_pct, reverse=True)
