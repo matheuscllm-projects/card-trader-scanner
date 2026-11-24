@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
+import shutil
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 for _p in (REPO_ROOT, Path(__file__).resolve().parent):
@@ -188,6 +189,12 @@ def test_validation_summary_counts_api_errors_and_unsupported_currency(caplog):
 DECISION = REPO_ROOT / "scripts" / "scanner_exit_decision.ps1"
 
 
+# Executável do PowerShell: `powershell` (Windows) ou `pwsh` (runners Linux que o trazem). None = indisponível.
+POWERSHELL = shutil.which("powershell") or shutil.which("pwsh")
+needs_powershell = pytest.mark.skipif(
+    POWERSHELL is None, reason="PowerShell indisponível neste runner; os launchers .ps1 são só Windows")
+
+
 def _decide(exit_code, raw_exists, raw_age_s, tmp_path):
     raw = tmp_path / "raw.xlsx"
     if raw_exists:
@@ -196,7 +203,7 @@ def _decide(exit_code, raw_exists, raw_age_s, tmp_path):
         os.utime(raw, (t, t))
     run_start = "(Get-Date).AddSeconds(-60)"          # o run começou há 60 s
     cmd = f". '{DECISION}'; Get-PostprocessDecision -ExitCode {exit_code} -RawOut '{raw}' -RunStart {run_start}"
-    out = subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, text=True, timeout=60)
+    out = subprocess.run([POWERSHELL, "-NoProfile", "-Command", cmd], capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     return out.stdout.strip().splitlines()[-1]
 
@@ -210,6 +217,7 @@ def _decide(exit_code, raw_exists, raw_age_s, tmp_path):
     (21, False, 0, "abort"),
     (1, True, 10, "abort"), (130, True, 10, "abort"),
 ])
+@needs_powershell
 def test_launcher_decision_runs_the_real_powershell_logic(tmp_path, code, exists, age, expect):
     assert _decide(code, exists, age, tmp_path) == expect
 

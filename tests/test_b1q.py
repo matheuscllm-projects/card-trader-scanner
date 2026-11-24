@@ -20,7 +20,7 @@ for _p in (REPO_ROOT, Path(__file__).resolve().parent):
 
 import cardtrader_postprocess as pp  # noqa: E402
 import cardtrader_scanner as sc  # noqa: E402
-from test_b1o import FINAL4, _flow, _raw  # noqa: E402
+from test_b1o import FINAL4, POWERSHELL, _flow, _raw, needs_powershell  # noqa: E402
 from test_b1p import _fake_repo, SCRIPTS  # noqa: E402
 
 import datetime as _dt
@@ -112,6 +112,7 @@ def test_exit_96_is_in_the_single_table():
     assert "96" in t
 
 
+@needs_powershell
 @pytest.mark.parametrize("ps1,extra", [("run_weekly_local.ps1", []), ("run_priority_scan.ps1", ["-Sets", "uf"]),
                                        ("run_critical_resscan.ps1", ["-Sets", "uf"]), ("run_weekly_2026-05-19.ps1", [])])
 @pytest.mark.parametrize("scanner_exit,post_exit,expect", [
@@ -123,7 +124,7 @@ def test_launchers_report_postprocess_failure_with_96(tmp_path, ps1, extra, scan
         "import os,sys\nopen(os.path.join(os.path.dirname(os.path.abspath(__file__)),'post_ran.txt'),'w').write('1')\n"
         "sys.exit(int(os.environ.get('FAKE_POST_EXIT','0')))\n", encoding="utf-8")
     env = dict(os.environ, CT_SCANNER_REPO=str(repo), FAKE_SCANNER_EXIT=str(scanner_exit), FAKE_POST_EXIT=str(post_exit))
-    r = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(SCRIPTS / ps1),
+    r = subprocess.run([POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(SCRIPTS / ps1),
                         "-Stamp", "t", *extra], capture_output=True, text=True, timeout=180, env=env)
     assert r.returncode == expect, (r.stdout, r.stderr)
     logs = "".join(p.read_text(encoding="utf-8", errors="replace") for p in (repo / "logs").glob("*.log"))
