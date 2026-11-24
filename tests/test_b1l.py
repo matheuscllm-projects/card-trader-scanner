@@ -74,3 +74,10 @@ def _flag_md(limit):
 def test_pc_diverge_flag_follows_cfg_limit(limit, expect):
     md = _flag_md(limit)
     assert ("PC diverge" in md.split("\n_")[0]) is expect
+
+
+# ───────── (3) versao da logica de preco: a ambiguidade/holo mudaram, cache de 24h antigo nao serve ─────────
+def test_price_cache_key_changes_with_b1l_logic_version():
+    import ct_variants as cv
+    k = cv.price_cache_key("neo1", "9", "Lugia", False, False, True)
+    assert k.startswith("pokemontcg:4:") and ":3:" not in k.split("neo1")[0]

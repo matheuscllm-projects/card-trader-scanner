@@ -12,7 +12,7 @@ import math
 import re
 from typing import NamedTuple, Optional
 
-PRICE_LOGIC_VERSION = "3"
+PRICE_LOGIC_VERSION = "4"
 
 OK = "OK"
 INCOMPATIVEL = "VARIANTE_INCOMPATIVEL"

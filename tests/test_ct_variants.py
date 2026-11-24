@@ -461,7 +461,7 @@ def test_i6_uid_normaliza_tipo():
 def test_v16_chave_de_cache_e_versao():
     a = cv.price_cache_key("neo1", "9", "Lugia", True, False, True)
     b = cv.price_cache_key("neo1", "9", "Lugia", False, False, True)
-    assert a != b and cv.PRICE_LOGIC_VERSION == "3" and a.startswith("pokemontcg:3:")
+    assert a != b and cv.PRICE_LOGIC_VERSION == "4" and a.startswith("pokemontcg:4:")
     assert cv.price_cache_key("neo1", "9", "Lugia", False, False, True) != \
         cv.price_cache_key("neo1", "9", "Lugia", False, False, False)  # is_holo na chave
     assert a != cv.price_cache_key("neo1", "9", "Lugia", True, True, True)
