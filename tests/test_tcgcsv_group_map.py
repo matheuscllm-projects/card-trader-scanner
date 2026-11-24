@@ -276,6 +276,10 @@ def test_multi_group_colliding_collector_key_is_dropped(monkeypatch):
     }
     prov = _multi_group_provider(groups, per_group)
     assert prov.prefill_set("zz", [], "Whatever") is True
-    # "4" existe nos dois groups → ambíguo → sem preço (nunca 5.0 nem 400.0)
-    assert prov.market_price_usd("A", "zz", "4/25", rarity="Rare Holo") is None
+    # "4" existe nos dois groups → ambíguo; B1i: o número COMPLETO (denominador) desempata sem ambiguidade,
+    # e sem denominador continua sem preço (nunca "um dos dois" por ordem de chegada)
+    assert prov.market_price_usd("A", "zz", "4/25", rarity="Rare Holo") == 5.0
+    assert prov.market_price_usd("A", "zz", "4/102", rarity="Rare Holo") == 400.0
+    assert prov.market_price_usd("A", "zz", "4", rarity="Rare Holo") is None
+    assert "referência ambígua: 2 produtos" in prov.last_ref_reason
     assert prov.market_price_usd("B", "zz", "5/25", rarity="Rare Holo") == 6.0

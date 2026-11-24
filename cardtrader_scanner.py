@@ -328,6 +328,7 @@ from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+import ct_refage
 import ct_variants
 from ct_chase import CHASE_ONLY_TIERS, CHASE_TIER_ORDER, classify_chase_tier  # unico dono do chase (informativo)
 from ct_economics import Costs, compute as compute_economics  # unico dono da margem
@@ -1144,6 +1145,7 @@ class Opportunity:
     # "dado de" (data do dado) ou "buscado em" (só a hora da busca, quando a fonte não expõe a data)
     ref_data_at: str = ""
     ref_data_label: str = ""
+    ref_inferred: str = ""   # B1g: acabamento INFERIDO da referência (motivo); "" = declarado pela CardTrader
     ref_swap: str = ""   # B1f: referência da fonte principal (velha) trocada pela do tcgcsv (mais nova)
 
 
@@ -1522,16 +1524,19 @@ class PricingProvider(ABC):
     last_divided: bool = False                   # a carta tem chaves de edição na fonte
     last_era_missing: bool = False
     last_ref_data_at: Optional[str] = None   # data do DADO (não da busca), quando a fonte expõe
+    last_ref_inferred: str = ""              # B1g: texto da inferência de acabamento ("" = declarado)
 
     def _reset_ref(self) -> None:
         self.last_ref_status, self.last_ref_reason, self.last_ref_key = "", "", None
         self.last_ref_exact, self.last_available_keys = False, []
         self.last_offer_variant, self.last_divided, self.last_era_missing = None, False, False
         self.last_ref_data_at = None
+        self.last_ref_inferred = ""
 
     def _set_ref(self, m, prices: dict, offer: tuple, era_missing: bool,
-                 rarity: Optional[str] = None) -> None:
+                 rarity: Optional[str] = None, inferred: Optional[str] = None) -> None:
         self.last_offer_variant, self.last_era_missing = offer, era_missing
+        self.last_ref_inferred = inferred or ""   # B1g: acabamento INFERIDO da referência (texto) ou ""
         self.last_ref_status, self.last_ref_reason = m.status, m.reason
         self.last_ref_key = m.key
         self.last_available_keys = ct_variants.available_keys(prices)
@@ -2013,10 +2018,9 @@ class PokemonTcgIoProvider(PricingProvider):
             if strict_set_check:
                 # v2.7 Layer 1: rejeita match se set retornado ∉ expected_sets.
                 # Não basta totalCount==1 — precisa bater algum set esperado.
-                for cand in results:
-                    cand_set = (cand.get("set") or {}).get("id", "").lower()
-                    if cand_set in expected_sets:
-                        return cand
+                in_set = [c for c in results if (c.get("set") or {}).get("id", "").lower() in expected_sets]
+                if in_set:
+                    return self._pick_unique(in_set, card_name, number)
                 # Nenhum candidato bate o set_code do CT ou alias
                 first_set = (results[0].get("set") or {}).get("id", "")
                 log.info(
@@ -2024,8 +2028,19 @@ class PokemonTcgIoProvider(PricingProvider):
                     f"≠ api_set={first_set} ({total} candidatos) — '{base_q}'"
                 )
                 continue
-            return results[0]
+            return self._pick_unique(results, card_name, number)
         return None
+
+    @staticmethod
+    def _pick_unique(cands: list, card_name: str, number: str) -> dict:
+        """B1j: vários resultados do mesmo set/número = ambíguo (nunca `results[0]`). Só casa se o número completo
+        (com denominador = printedTotal) ou o nome exato desempata; senão `{"_ambiguous": motivo}`."""
+        if len(cands) == 1:
+            return cands[0]
+        wrapped = [{"name": c.get("name"), "number": f"{c.get('number')}/{(c.get('set') or {}).get('printedTotal')}",
+                    "card": c} for c in cands]
+        chosen, why = ct_variants.resolve_candidates(wrapped, card_name, number)
+        return chosen["card"] if chosen else {"_ambiguous": why}
 
     def market_price_usd(self, card_name: str, set_code: str,
                          collector_number: str,
@@ -2060,16 +2075,22 @@ class PokemonTcgIoProvider(PricingProvider):
             self.last_normal_market = cached.get("normal_market")
             self.last_ref_data_at = cached.get("ref_data_at")
             prices = cached.get("prices") or {}
-            m, hd, offer = ct_variants.match_offer(
+            om = ct_variants.match_offer(
                 prices, first_edition, foil, rarity, ref_rarity=self.last_ptcg_rarity,
                 set_released=self.last_set_release_date, set_code=set_code)
+            m, hd, offer = om.match, om.hd, om.offer
             if m.status == ct_variants.OK and m.key == self.last_variant_used:
-                self._set_ref(m, prices, offer, hd.era_missing, rarity)
+                self._set_ref(m, prices, offer, hd.era_missing, rarity, inferred=om.inferred)
                 return cached["market_usd"]
             # entrada de cache que não reproduz o casamento atual: ignora e refaz (nunca serve palpite)
 
         card = self._search(card_name, set_code, collector_number)
         if not card:
+            return None
+        if card.get("_ambiguous"):      # B1j: >1 resultado e nenhum dado declarado desempata
+            hd = ct_variants.holo_detection(rarity, set_code=set_code)
+            self._set_ref(ct_variants.Match(None, ct_variants.INCOMPATIVEL, card["_ambiguous"], None), {},
+                          ct_variants.offer_variant(first_edition, foil, hd.is_holo), hd.era_missing, rarity)
             return None
         self.last_tcg_url = (card.get("tcgplayer") or {}).get("url")
         self.last_ptcg_rarity = card.get("rarity")
@@ -2095,10 +2116,11 @@ class PokemonTcgIoProvider(PricingProvider):
         # v2.24: âncora `normal.market` pro guard reverse-outlier.
         self.last_normal_market = (tcg.get("normal") or {}).get("market")
 
-        m, hd, offer = ct_variants.match_offer(
+        om = ct_variants.match_offer(
             tcg, first_edition, foil, rarity, ref_rarity=card.get("rarity"),
             set_released=self.last_set_release_date, set_code=set_code)
-        self._set_ref(m, tcg, offer, hd.era_missing, rarity)
+        m, hd, offer = om.match, om.hd, om.offer
+        self._set_ref(m, tcg, offer, hd.era_missing, rarity, inferred=om.inferred)
         upd = (card.get("tcgplayer") or {}).get("updatedAt")
         self.last_ref_data_at = _iso_date(upd)
         if m.status != ct_variants.OK:
@@ -2334,9 +2356,10 @@ class TcgCsvFallbackProvider(PricingProvider):
         cobertura) ou "fetch_failed" (rede/5xx/timeout = falha operacional).
         Roda no máx. 1× por set; /groups com falha não é refeito a cada set
         (cache negativo só dentro do run)."""
-        self.last_prefill_status = "ok" if self._set_index.get(ct_set_code) else "no_group"
+        _has = bool(self._set_index.get(ct_set_code)) or bool((self.__dict__.get("_ambiguous") or {}).get(ct_set_code))
+        self.last_prefill_status = "ok" if _has else "no_group"
         if ct_set_code in self._set_index:
-            return bool(self._set_index[ct_set_code])
+            return _has
         # Lote 3c: cache negativo de /groups EXPIRA em poucos minutos (um blip no
         # 1º set não condena o run) e cada busca tenta algumas vezes com espera curta.
         if (self._groups_fetched and self._groups is None
@@ -2375,7 +2398,7 @@ class TcgCsvFallbackProvider(PricingProvider):
         # v2.28: set pode abranger >1 group (gen = Generations + Radiant
         # Collection). Indexa cada group; se QUALQUER um falhar, aborta o set
         # (índice parcial perderia o guard de colisão abaixo).
-        per_group: list[tuple[dict, dict, dict]] = []
+        per_group: list[tuple[dict, dict, dict, dict]] = []
         group_meta: list[tuple] = []   # (nome do group, publishedOn) — Shadowless / idade do set
         for group_id in group_ids:
             products, f1 = self._get_json(f"{group_id}/products")
@@ -2395,18 +2418,26 @@ class TcgCsvFallbackProvider(PricingProvider):
             group_meta.append((g.get("name") or "", g.get("publishedOn")))
 
         from collections import Counter
-        key_count = Counter(k for idx, _, _r in per_group for k in idx)
-        collisions = {k for k, n in key_count.items() if n > 1}
-        if collisions:
+        # B1i: candidatos de TODOS os groups do set por chave; >1 produto (no mesmo group ou entre
+        # groups) = colisão: sai do índice e só casa se um dado declarado da oferta desempatar
+        all_cands: dict[str, list] = {}
+        for (_i, _p, _r, cd), (gname, _pub) in zip(per_group, group_meta):
+            for k, lst in cd.items():
+                for c in lst:
+                    all_cands.setdefault(k, []).append({**c, "gname": gname})
+        ambiguous = {k: v for k, v in all_cands.items() if len(v) > 1}
+        collisions = set(ambiguous)
+        self.__dict__.setdefault("_ambiguous", {})[ct_set_code] = ambiguous
+        if ambiguous:
             log.warning(
-                f"  tcgcsv {ct_set_code}: {len(collisions)} número(s) presentes "
-                f"em >1 group {group_ids} — descartados (ambíguos, sem preço)"
+                f"  tcgcsv {ct_set_code}: {len(ambiguous)} chave(s) com >1 produto na referência "
+                f"(group(s) {group_ids}) — ambíguas (só casam por número completo/nome exato)"
             )
         index: dict[str, dict] = {}
         pid_map: dict[str, dict] = {}
         gname_map: dict[str, str] = {}
         rar_all: dict[str, str] = {}
-        for (idx, pids, rars), (gname, _pub) in zip(per_group, group_meta):
+        for (idx, pids, rars, _cd), (gname, _pub) in zip(per_group, group_meta):
             for key, variants in idx.items():
                 if key in collisions:
                     continue
@@ -2422,7 +2453,7 @@ class TcgCsvFallbackProvider(PricingProvider):
         self._set_index[ct_set_code] = index
         self._pid_index[ct_set_code] = pid_map
         self.__dict__.setdefault("_fetched_at", {})[ct_set_code] = now_iso()
-        self.last_prefill_status = "ok" if index else "no_group"
+        self.last_prefill_status = "ok" if (index or ambiguous) else "no_group"
         if index:
             # v2.26: a mesma classe atende fallback (v2.23) e primário
             # (--provider tcgcsv) — mensagem neutra quanto ao papel.
@@ -2431,7 +2462,7 @@ class TcgCsvFallbackProvider(PricingProvider):
                 f"{'+'.join(str(g) for g in group_ids)}): {len(index)} "
                 f"cards indexados"
             )
-        return bool(index)
+        return bool(index) or bool(ambiguous)
 
     def _dump_at(self) -> Optional[str]:
         """Data do DUMP diário do tcgcsv (`/last-updated.txt`) — a data do DADO. Uma busca por run;
@@ -2453,16 +2484,19 @@ class TcgCsvFallbackProvider(PricingProvider):
         return d["_dump_at_val"]
 
     @staticmethod
-    def _index_group(products: dict, prices: dict) -> tuple[dict, dict, dict]:
+    def _index_group(products: dict, prices: dict) -> tuple[dict, dict, dict, dict]:
         """Índice de UM group tcgcsv: (numerador→variantes, numerador→variante→pid,
-        numerador→raridade do PRODUTO no tcgcsv — B1e: 2ª fonte de rótulo p/ detectar holo)."""
+        numerador→raridade do PRODUTO no tcgcsv — B1e: 2ª fonte de rótulo p/ detectar holo,
+        numerador→LISTA de produtos candidatos — B1i: colisão = mais de 1 produto na chave)."""
         # productId → numerador do collector number (extendedData "Number")
         num_by_pid: dict[int, str] = {}
         rar_by_pid: dict[int, str] = {}
+        name_by_pid: dict[int, str] = {}
         for p in products.get("results") or []:
             pid = p.get("productId")
             if pid is None:
                 continue
+            name_by_pid[pid] = p.get("name") or ""
             for ed in p.get("extendedData") or []:
                 if ed.get("name") == "Number" and ed.get("value"):
                     num_by_pid[pid] = str(ed["value"])
@@ -2480,15 +2514,16 @@ class TcgCsvFallbackProvider(PricingProvider):
             variant = ct_variants.tcgcsv_variant(sub)
             if variant == ct_variants.DESCONHECIDO:
                 continue  # subtype desconhecido → ignora (não inventa variante)
-            variants_by_pid[pid][variant] = {
+            ct_variants.add_price_row(variants_by_pid[pid], variant, sub, {
                 "market": r.get("marketPrice"),
                 "low": r.get("lowPrice"),
                 "mid": r.get("midPrice"),
-            }
+            })
 
         index: dict[str, dict] = {}
         pid_map: dict[str, dict] = {}
         rar_map: dict[str, str] = {}
+        cands: dict[str, list] = {}
         for pid, num_raw in num_by_pid.items():
             # v2.26: chave por VARIANTE de numeração (letras preservadas) —
             # o digits-only antigo colidia série H / sufixos a/b do e-Card e
@@ -2499,6 +2534,11 @@ class TcgCsvFallbackProvider(PricingProvider):
             if not key or not any(c.isdigit() for c in key):
                 continue
             variants = variants_by_pid.get(pid)
+            # B1i: TODOS os produtos numerados da chave (com ou sem preço) são candidatos; chave com
+            # mais de um é AMBÍGUA e não entra no índice (nada de last-wins)
+            cands.setdefault(key, []).append({
+                "pid": pid, "name": name_by_pid.get(pid, ""), "number": str(num_raw),
+                "rarity": rar_by_pid.get(pid), "variants": variants or {}})
             if variants:
                 index[key] = variants
                 # MESMA escolha last-wins do _set_index → o productId guardado é o
@@ -2506,7 +2546,50 @@ class TcgCsvFallbackProvider(PricingProvider):
                 pid_map[key] = {v: pid for v in variants}
                 if pid in rar_by_pid:
                     rar_map[key] = rar_by_pid[pid]
-        return index, pid_map, rar_map
+        for k, v in cands.items():
+            if len(v) > 1:
+                index.pop(k, None)
+                pid_map.pop(k, None)
+                rar_map.pop(k, None)
+        return index, pid_map, rar_map, cands
+
+    def _price_ambiguous(self, cands: list, card_name: str, set_code: str, collector_number: str,
+                         foil: bool, rarity: Optional[str], first_edition: bool) -> Optional[float]:
+        """B1i: mais de um PRODUTO na chave. Casa só se o número completo/nome exato desempata; senão
+        INCOMPATIVEL "referência ambígua: N produtos com a mesma chave" (sem margem, sem Inferido)."""
+        chosen, why = ct_variants.resolve_candidates(cands, card_name, collector_number)
+        rel = (self.__dict__.get("_set_released") or {}).get(set_code)
+        self.last_set_release_date = rel
+        self.last_ref_data_at = self._dump_at()
+        self.last_price_source = "tcgcsv"
+        self.last_price_fetched_at = getattr(self, "_fetched_at", {}).get(set_code)
+        if chosen is None:
+            hd = ct_variants.holo_detection(rarity, set_released=rel, set_code=set_code)
+            offer = ct_variants.offer_variant(first_edition, bool(foil), hd.is_holo)
+            self._set_ref(ct_variants.Match(None, ct_variants.INCOMPATIVEL, why, None), {}, offer,
+                          hd.era_missing, rarity)
+            return None
+        variants = chosen["variants"]
+        if not variants:
+            hd = ct_variants.holo_detection(rarity, set_released=rel, set_code=set_code)
+            offer = ct_variants.offer_variant(first_edition, bool(foil), hd.is_holo)
+            self._set_ref(ct_variants.Match(None, ct_variants.SEM_PRECO,
+                                            f"produto '{chosen['name']}' encontrado sem preço", None), {}, offer,
+                          hd.era_missing, rarity)
+            return None
+        self.last_normal_market = (variants.get("normal") or {}).get("market")
+        om = ct_variants.match_offer(variants, first_edition, foil, rarity, ref_rarity=chosen.get("rarity"),
+                                     set_released=rel, set_code=set_code, group_name=chosen.get("gname"))
+        m, hd, offer = om.match, om.hd, om.offer
+        self._set_ref(m, variants, offer, hd.era_missing, rarity, inferred=om.inferred)
+        pid = chosen["pid"]
+        if m.status != ct_variants.OK:
+            self.last_tcg_url = f"https://www.tcgplayer.com/product/{pid}"
+            return None
+        self.last_variant_used = m.key
+        self.last_tcg_url = f"https://www.tcgplayer.com/product/{pid}"
+        market = (variants[m.key].get("market")) or 0.0
+        return market if market > 0 else None
 
     def market_price_usd(self, card_name: str, set_code: str,
                          collector_number: str,
@@ -2529,12 +2612,15 @@ class TcgCsvFallbackProvider(PricingProvider):
         self._reset_ref()
 
         index = self._set_index.get(set_code)
-        if not index:
+        if not index and not (self.__dict__.get("_ambiguous") or {}).get(set_code):
             return None
         key = tcgcsv_collector_key(collector_number)
         if not key:
             return None
-        variants = index.get(key)
+        amb = (self.__dict__.get("_ambiguous") or {}).get(set_code, {}).get(key)
+        if amb:
+            return self._price_ambiguous(amb, card_name, set_code, collector_number, foil, rarity, first_edition)
+        variants = (index or {}).get(key)
         if not variants:
             return None
         foil = bool(foil)
@@ -2545,8 +2631,8 @@ class TcgCsvFallbackProvider(PricingProvider):
         gname = (self.__dict__.get("_group_name") or {}).get(set_code, {}).get(key)
         om = ct_variants.match_offer(variants, first_edition, foil, rarity, ref_rarity=prod_rarity,
                                      set_released=rel, set_code=set_code, group_name=gname)
-        m, hd, offer = om
-        self._set_ref(m, variants, offer, hd.era_missing, rarity)
+        m, hd, offer = om.match, om.hd, om.offer
+        self._set_ref(m, variants, offer, hd.era_missing, rarity, inferred=om.inferred)
         self.last_ref_data_at = self._dump_at()
         self.last_price_source = "tcgcsv"
         self.last_price_fetched_at = getattr(self, "_fetched_at", {}).get(set_code)
@@ -3208,6 +3294,10 @@ class CheckpointWriter:
             self._fh = None
 
 
+def _n_falhas(n: int) -> str:
+    return f"{n} falha" if n == 1 else f"{n} falhas"
+
+
 class SourceBreaker:
     """B1e: disjuntor da fonte principal de preço, medido POR OFERTA dentro do run.
 
@@ -3260,7 +3350,7 @@ class SourceBreaker:
             bad = [t for ok, lat, t in self._w if (not ok) or lat > self.slow_s]
             self.events.append({"event": "open", "at": bad[0] if bad else self.opened_at,
                                 "opened_at": self.opened_at, "fails": fails, "n": n,
-                                "why": "latência" if slow and fails / n < self.fail_rate else "falhas",
+                                "why": "latência" if slow else "falhas",
                                 "slow_s": self.slow_s})
             return True
         return False
@@ -3822,8 +3912,11 @@ class Scanner:
                 infra_detail[l.uid] = f"tcgcsv: {why_t} | {nc}"
         rescued = len(handled)
         prim = self._primary_name()
-        self._set_by_source = ({"tcgcsv": hits + rescued} if prim == "tcgcsv"
-                               else {prim: hits, "tcgcsv": rescued})
+        src = self.__dict__.get("_set_src") or {}
+        self._set_by_source = {prim: src.get(prim, 0), "tcgcsv": src.get("tcgcsv", 0)}
+        for k, v in src.items():
+            if k not in self._set_by_source:
+                self._set_by_source[k] = v
         if rescued:
             self._set_note = f"tcgcsv_rescue_priced_{rescued}_of_{len(pending)}"
         if primary_failed:
@@ -3883,6 +3976,7 @@ class Scanner:
         self._set_total: int = 0
         self._set_note: Optional[str] = None
         self._set_by_source: dict = {}
+        self._set_src: dict = {}
         self._set_breaker_note: Optional[str] = None
         self._set_all: list = []
         self._set_accounted: set = set()
@@ -4147,7 +4241,10 @@ class Scanner:
                     self.__dict__.setdefault("_noref_first", {})[l.uid] = self._noref_row(
                         exp_code, l, self.pricing)
                     set_noref_first.append(l)
-                elif isinstance(self.pricing, TcgCsvFallbackProvider) and self.__dict__.get("ptcg_alt") is not None:
+                elif (isinstance(self.pricing, TcgCsvFallbackProvider) and self.__dict__.get("ptcg_alt") is not None
+                      and self._pa(self.pricing, "last_ref_status", str, "") == ct_variants.SEM_PRECO):
+                    # B1j: 2ª fonte SÓ quando o tcgcsv não tem o preço da chave certa; resposta INCOMPATIVEL/ambígua
+                    # do tcgcsv nunca é trocada por um preço do pokemontcg.io
                     got = self._ask_ptcg_alt(exp_code, l)
                     if got:
                         opp = self._build_opportunity(l, got, self.ptcg_alt)
@@ -4198,9 +4295,9 @@ class Scanner:
             if breaker_opened:
                 self.__dict__.setdefault("_breaker_sets", set()).add(exp_code)
                 self._set_breaker_note = (f"disjuntor aberto às {brk.opened_at:%H:%M} após "
-                                          f"{brk.fail_count} falhas em {brk.sample_count} ofertas")
+                                          f"{_n_falhas(brk.fail_count)} em {brk.sample_count} ofertas")
                 log.warning(f"  🔌 {self._primary_name()} DEGRADADA em {exp_code} após {i} oferta(s): "
-                            f"{brk.fail_count} falhas em {brk.sample_count} — o restante do set vai "
+                            f"{_n_falhas(brk.fail_count)} em {brk.sample_count} — o restante do set vai "
                             f"direto ao tcgcsv (lote, mesma regra exata); sem skip-list")
                 yield from self._conclude_set(
                     exp_code, exp_name, _pending(i), causes, total_listings, set_tcg_hits,
@@ -4317,7 +4414,7 @@ class Scanner:
         ref_label = "dado de" if ref_data_at else ("buscado em" if fetched else "")
         if not ref_data_at:
             ref_data_at = fetched
-        return Opportunity(
+        opp_obj = Opportunity(
             listing=l,
             tcg_market_usd=tcg_market,
             tcg_market_brl=tcg_brl,
@@ -4343,8 +4440,14 @@ class Scanner:
             else (ct_variants.FIN_REVERSE if l.foil else
                   ct_variants.FIN_HOLO if is_holo_card else ct_variants.FIN_NORMAL),
             ref_compatible=self._pa(source_provider, "last_ref_exact", bool, False),
+            ref_inferred=self._pa(source_provider, "last_ref_inferred", str, "") or "",
             ref_data_at=ref_data_at, ref_data_label=ref_label,
         )
+        # B1g: contagem por fonte derivada das LINHAS efetivamente criadas (inclui trocas por idade)
+        src = price_source or self._primary_name()
+        cnt = self.__dict__.setdefault("_set_src", {})
+        cnt[src] = cnt.get(src, 0) + 1
+        return opp_obj
 
     def _opp_edition(self, l: "Listing", provider) -> str:
         """Edição da linha: 1st (oferta 1st), ED_NONE (carta sem divisão de edição) ou unl."""
@@ -4355,6 +4458,19 @@ class Scanner:
         if key is not None and not divided:
             return ct_variants.ED_NONE
         return ct_variants.ED_UNL
+
+    def _alt_breaker(self) -> Optional["SourceBreaker"]:
+        """Disjuntor da 2ª fonte (pokemontcg.io quando o primário é tcgcsv): MESMOS parâmetros do
+        disjuntor principal (--source-*); `scanner.breaker = None` (--no-source-breaker) desliga os dois."""
+        if "breaker" in self.__dict__ and self.breaker is None:
+            return None
+        if "ptcg_alt_breaker" not in self.__dict__:
+            base = self.__dict__.get("breaker")
+            self.ptcg_alt_breaker = (SourceBreaker(window=base.window, min_samples=base.min_samples,
+                                                   fail_rate=base.fail_rate, slow_s=base.slow_s,
+                                                   probe_every_s=base.probe_every_s)
+                                     if base is not None else SourceBreaker())
+        return self.ptcg_alt_breaker
 
     def _not_consulted_text(self, abort_kind: Optional[str], abort_reason: Optional[str]) -> Optional[str]:
         """Frase 'fonte X não consultada: causa' para as ofertas que a fonte principal não alcançou."""
@@ -4387,8 +4503,8 @@ class Scanner:
         if alt is None:
             commit("pokemontcg.io não consultada: não habilitada neste run", "tcgcsv")
             return None
-        brk = self.__dict__.setdefault("ptcg_alt_breaker", SourceBreaker())
-        if brk.is_open:
+        brk = self._alt_breaker()          # None = disjuntor desligado (--no-source-breaker)
+        if brk is not None and brk.is_open:
             if brk.probe_due():
                 brk.mark_probe()
                 probe = getattr(alt, "probe", None)
@@ -4412,8 +4528,13 @@ class Scanner:
         except (requests.ConnectionError, requests.Timeout) as e:
             infra, px = True, None
             log.debug(f"  pokemontcg.io (2ª fonte) falhou {l.card_name}: {e!r}")
+        except Exception as e:  # noqa: BLE001 — fonte OPCIONAL: não derruba o set; a falha vai no motivo da oferta
+            log.warning(f"  pokemontcg.io (fonte alternativa) falhou em {l.card_name}: {type(e).__name__}: {e}")
+            commit(f"pokemontcg.io: fonte alternativa falhou ({type(e).__name__}: {str(e)[:80]})", "tcgcsv")
+            return None
         r1 = getattr(alt, "retry_5xx", 0)
-        brk.record(not (infra or (isinstance(r1, int) and r1 > r0)), time.monotonic() - t0)
+        if brk is not None:
+            brk.record(not (infra or (isinstance(r1, int) and r1 > r0)), time.monotonic() - t0)
         if infra:
             commit("pokemontcg.io consultada e INDISPONÍVEL (falha de rede/5xx)", "tcgcsv")
             return None
@@ -4424,13 +4545,19 @@ class Scanner:
         return None
 
     def _ref_age_days(self, provider) -> Optional[int]:
-        d = _iso_date(getattr(provider, "last_ref_data_at", None))
-        if not d:
-            return None
-        try:
-            return (datetime.now().date() - datetime.strptime(d, "%Y-%m-%d").date()).days
-        except ValueError:
-            return None
+        """Idade (dias) do dado da referência — MESMA função do postprocess (ct_refage); None =
+        desconhecida (a referência não informa a data do dado)."""
+        at = getattr(provider, "last_ref_data_at", None)
+        return ct_refage.ref_age_days(at, ct_refage.LABEL_DATA if at else "", datetime.now().astimezone())
+
+    def _count_inferred(self, opps: list) -> None:
+        """B1g: quantas linhas têm acabamento INFERIDO, por set (resumo e Stats)."""
+        c: dict = {}
+        for o in opps:
+            if getattr(o, "ref_inferred", ""):
+                code = getattr(o.listing, "set_code", "") or "?"
+                c[code] = c.get(code, 0) + 1
+        self.stats["acabamento_inferido"] = "; ".join(f"{k} {v}" for k, v in sorted(c.items()))
 
     def _fresher_tcgcsv(self, exp_code: str, exp_name: str, l: "Listing"):
         """B1f: a referência da fonte principal passou do limite de idade E o tcgcsv tem referência
@@ -4452,9 +4579,10 @@ class Scanner:
         if not px or px <= 0:
             return None
         self.stats["refs_trocadas_por_idade"] = self.stats.get("refs_trocadas_por_idade", 0) + 1
-        new_at = _iso_date(getattr(self.tcgcsv, "last_ref_data_at", None)) or "lote do dia"
+        new_at = _iso_date(getattr(self.tcgcsv, "last_ref_data_at", None)) or "data do lote não informada"
+        new_txt = f"dado de {new_at}" if _iso_date(getattr(self.tcgcsv, "last_ref_data_at", None)) else new_at
         return px, (f"referência trocada: {self._primary_name()} (dado de {old_at}, {age} dias) → "
-                    f"tcgcsv (dado de {new_at})")
+                    f"tcgcsv ({new_txt})")
 
     def _primary_name(self) -> str:
         n = getattr(getattr(self, "pricing", None), "name", None)
@@ -4569,7 +4697,7 @@ class Scanner:
             self._noref_uids = set()
             self._noref_first = {}
             self._infra_failed = {}
-            self._set_by_source, self._set_breaker_note = {}, None
+            self._set_by_source, self._set_breaker_note, self._set_src = {}, None, {}
             try:
                 # v2.6: itera o generator e escreve cada Opportunity no checkpoint
                 # ASSIM QUE for yielded. Antes era `opps.extend(scan_expansion(exp))`
@@ -4669,6 +4797,11 @@ class Scanner:
         self.stats["listings_sem_preco"] = len(self.unpriced_rows)
         self.stats["saude_fonte_principal"] = self._source_health_line() or ""
         self.stats["cobertura_baixa"] = " | ".join(self._low_coverage())
+        self._count_inferred(opps)
+        _by: dict = {}
+        for o in opps:
+            _by[o.price_source or "?"] = _by.get(o.price_source or "?", 0) + 1
+        self.stats["linhas_por_fonte"] = "; ".join(f"{k} {v}" for k, v in sorted(_by.items()))
         for line in self.run_summary_lines():
             log.warning(line) if ("tentar de novo" in line) else log.info(line)
         # Ordena por margem bruta desc (maior oportunidade primeiro)
@@ -4678,22 +4811,32 @@ class Scanner:
     def _source_health_line(self) -> Optional[str]:
         """B1e: frase de saúde da fonte principal (None quando não há disjuntor ativo no run)."""
         brk = self.__dict__.get("breaker")
+        alt = self.__dict__.get("ptcg_alt_breaker")
+        line = self._health_of(brk, "pokemontcg.io")
+        aline = self._health_of(alt, "pokemontcg.io (2ª fonte)") if alt is not None else None
+        parts = [x for x in (line, aline) if x]
+        return "; ".join(parts) or None
+
+    def _health_of(self, brk, label: str) -> Optional[str]:
         if brk is None:
             return None
         opens = [e for e in brk.events if e["event"] == "open"]
+        if not opens and not getattr(brk, "total_n", 0):
+            return None
         if not opens:
             if getattr(brk, "total_fail", 0):
-                return (f"pokemontcg.io saudável neste run, com {brk.total_fail} falha(s) em "
+                return (f"{label} saudável neste run, com {brk.total_fail} falha(s) em "
                         f"{brk.total_n} ofertas (abaixo do limite)")
-            return "pokemontcg.io saudável neste run (disjuntor não abriu)"
+            return f"{label} saudável neste run (disjuntor não abriu)"
         parts = []
         for k, e in enumerate(brk.events):
             if e["event"] == "open":
-                if e.get("why") == "latência":
-                    parts.append(f"pokemontcg.io degradada às {e['at']:%H:%M} por latência (média acima de "
-                                 f"{e.get('slow_s', 0):g} s em {e['n']} ofertas)")
+                if "latência" in e.get("why", ""):
+                    extra = f"; {_n_falhas(e['fails'])} em {e['n']}" if e["fails"] else ""
+                    parts.append(f"{label} degradada às {e['at']:%H:%M} por latência (média acima de "
+                                 f"{e.get('slow_s', 0):g} s em {e['n']} ofertas{extra})")
                 else:
-                    parts.append(f"pokemontcg.io degradada às {e['at']:%H:%M} após {e['fails']} falhas "
+                    parts.append(f"{label} degradada às {e['at']:%H:%M} após {_n_falhas(e['fails'])} "
                                  f"em {e['n']}")
             else:
                 parts.append(f"voltou às {e['at']:%H:%M}")
@@ -4763,7 +4906,12 @@ class Scanner:
             for k, v in (o.get("by_source") or {}).items():
                 by[k] = by.get(k, 0) + v
         if by:
-            lines.append("Preços por fonte: " + " | ".join(f"{k} {v}" for k, v in by.items()))
+            sw = (getattr(self, "stats", {}) or {}).get("refs_trocadas_por_idade", 0)
+            lines.append("Preços por fonte: " + " | ".join(f"{k} {v}" for k, v in by.items())
+                         + (f" ({sw} referências trocadas por idade já incluídas)" if sw else ""))
+            if sw:
+                lines.append(f"{sw} referências trocadas por idade (pokemontcg.io velha → tcgcsv); o resgate por "
+                             f"falha/miss da fonte principal é contado à parte (tcgcsv_fallback_priced)")
         r5 = getattr(getattr(self, "pricing", None), "retry_5xx", None)
         if isinstance(r5, int):
             lines.append(f"{r5} retries por 5xx/429 da pokemontcg.io neste run")
@@ -4779,6 +4927,9 @@ class Scanner:
         health = self._source_health_line()
         if health:
             lines.append(health)
+        inf = (getattr(self, "stats", {}) or {}).get("acabamento_inferido")
+        if inf:
+            lines.append(f"Acabamento INFERIDO da referência (Ref Compatível = Inferido; nunca COMPRA), por set: {inf}")
         n = len(getattr(self, "unpriced_rows", []))
         if n:
             lines.append(f"{n} listings sem preço — ver aba 'Sem preço' do XLSX")
@@ -5127,7 +5278,7 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         # B1b: data do DADO da referência + rótulo ("dado de" | "buscado em"); a margem líquida
         # usa só Hub + frete -> sempre PARCIAL, com a lista dos custos não informados.
         "Data Ref.", "Rótulo Data Ref.", "Líquida", "Custos Não Informados",
-        "Troca de Referência",
+        "Troca de Referência", "Acabamento Inferido (motivo)",
     ]
     ws.append(headers)
 
@@ -5179,11 +5330,12 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
             {ct_variants.ED_1ST: "1st Edition", ct_variants.ED_UNL: "Unlimited",
              ct_variants.ED_NONE: ct_variants.ED_NONE_LABEL}.get(opp.edition, ""),
             ct_variants.FIN_LABELS.get(opp.finish, ""),
-            ("" if opp.edition is None else ("Sim" if opp.ref_compatible else "Não")),
+            ("" if opp.edition is None else ("Inferido" if opp.ref_inferred
+                                             else ("Sim" if opp.ref_compatible else "Não"))),
             opp.validation_reason or "",
             opp.ref_data_at or "", opp.ref_data_label or "",
             *_liquid_label(opp, hub_fee_rate),
-            opp.ref_swap or "",
+            opp.ref_swap or "", opp.ref_inferred or "",
         ])
 
     # ─── Formatação ───
@@ -5364,8 +5516,9 @@ def parse_args():
                          "entregue com `cardtrader_postprocess.py --ratio-column`."))
     p.add_argument("--include-graded", action="store_true",
                    help="Incluir cartas graded (PSA/BGS/CGC). Default: excluir")
-    p.add_argument("--provider", choices=list(PROVIDERS.keys()), default="pokemontcg",
-                   help=("Fonte de preços TCG (default: pokemontcg). v2.26: "
+    p.add_argument("--provider", choices=list(PROVIDERS.keys()), default="tcgcsv",
+                   help=("Fonte de preços TCG (default: tcgcsv desde B1j, decisão do dono 2026-11-24; "
+                         "pokemontcg.io = 2ª fonte, só quando o tcgcsv não tem a chave/preço). v2.26: "
                          "'tcgcsv' usa o tcgcsv.com como fonte PRIMÁRIA (bulk "
                          "por set, mesma escada de variante, sem key) — útil "
                          "quando a pokemontcg.io degrada com 500/502. Set que "
@@ -5487,8 +5640,8 @@ def parse_args():
         p.error("--source-fail-rate é FRAÇÃO entre 0 e 1 (ex.: 0.5 = 50%)")
     if args.source_window < 2 or args.source_slow_s <= 0 or args.source_probe_s < 0:
         p.error("--source-window ≥ 2, --source-slow-s > 0 e --source-probe-s ≥ 0")
-    if args.max_ref_age_days <= 0:
-        p.error("--max-ref-age-days deve ser > 0")
+    if not (args.max_ref_age_days > 0) or args.max_ref_age_days == float("inf"):
+        p.error("--max-ref-age-days deve ser um número finito > 0")
     return args
 
 

@@ -79,8 +79,22 @@ def map_tcgcsv_prices(rows) -> tuple[dict, list]:
         if key == DESCONHECIDO:
             ignored.append(sub)
         else:
-            prices[key] = {"market": r.get("marketPrice")}
+            add_price_row(prices, key, sub, {"market": r.get("marketPrice")})
     return prices, ignored
+
+
+def add_price_row(variants: dict, key: str, sub, row: dict) -> None:
+    """B1j: o MESMO subTypeName duas vezes no mesmo produto. Preços iguais = uma linha; preços diferentes =
+    chave AMBÍGUA (market None + `ambiguous`): nunca last-wins."""
+    old = variants.get(key)
+    if old is None or old.get("ambiguous") is None and old.get("market") == row.get("market"):
+        variants[key] = row if old is None else old
+        return
+    if old.get("ambiguous"):
+        return
+    variants[key] = {"market": None, "low": None, "mid": None,
+                     "ambiguous": f"referência ambígua: o produto tem 2 linhas '{sub}' com preços diferentes "
+                                  f"({old.get('market')}; {row.get('market')})"}
 
 
 _NON_HOLO = re.compile(r"non[\s_-]*holo")
@@ -150,7 +164,8 @@ def holo_detection(*rarities: Optional[str], set_released=None,
     rel = _iso(set_released)
     needs_era = False
     if ((set_code or "").lower() in HOLO_ONLY_SETS
-            and not any(_NON_HOLO.search((r or "").lower()) for r in rarities)):   # rótulo "Non-Holo" explícito vence
+            and not any(_NON_HOLO.search((r or "").lower()) for r in rarities)          # "Non-Holo" explícito vence
+            and not any(rarity_conclusive(r) for r in rarities if r)):                   # rótulo conclusivo vence
         return HoloDetection(True, False, "set")
     for r in rarities:
         rl = _NON_HOLO.sub("", (r or "").lower())
@@ -282,6 +297,10 @@ def match_reference_variant(prices: dict, edicao: str, acabamento: str,
     if not known:
         ign = ", ".join(sorted(str(k) for k in prices))
         return fail(INCOMPATIVEL, f"só chaves desconhecidas (ignoradas: {ign})")
+    for k in sorted(known):      # B1j: chave certa AMBÍGUA (mesmo subtipo duas vezes, preços diferentes)
+        c = PTCG_KEY_TO_CANON[k]
+        if (prices[k] or {}).get("ambiguous") and c[1] == acabamento and c[0] in (ED_1ST if edicao == ED_1ST else ED_UNL, ED_NONE):
+            return fail(INCOMPATIVEL, prices[k]["ambiguous"])
     usable = _usable(prices)
     if not usable:
         return fail(SEM_PRECO,
@@ -310,6 +329,12 @@ def match_reference_variant(prices: dict, edicao: str, acabamento: str,
     for k, c in pool.items():
         if c[1] == acabamento:
             return Match(k, OK, "", c)
+    # a chave certa EXISTE no produto mas sem preço: "encontrada, sem preço" (nunca vira outra chave)
+    for k in sorted(known):
+        c = PTCG_KEY_TO_CANON[k]
+        if c[1] == acabamento and (c[0] == want_ed or (not divided and c[0] == ED_NONE)) and k not in pool:
+            return fail(SEM_PRECO, f"a chave {k} ({want}) existe no produto mas sem preço (encontrada, sem preço; "
+                                   f"disponíveis: {avail}){note}")
     return inc(f"sem preço {want}")
 
 
@@ -325,10 +350,36 @@ def valid_published_on(value) -> Optional[str]:
     return m.group(1) if m else None
 
 
+# DECISÃO DO DONO PENDENTE (ponto único e nomeado): raridades da CardTrader que NUNCA inferem o
+# acabamento da referência — a oferta fica SEM referência compatível. Hoje: vazia e "Promo" (a CT não
+# informa o acabamento). Outro rótulo INCONCLUSIVO (grafia que não conhecemos, ex.: "Fixed" nas cartas BREAK)
+# + produto holo SEM nenhuma impressão normal = acabamento INFERIDO ("Inferido", nunca COMPRA).
+NO_INFERENCE_CT_RARITIES = frozenset({"", "promo"})
+
+
+# DECISÃO DO DONO PENDENTE (ponto único e nomeado): raridade CT vazia/"Promo" (não informa o acabamento)
+# + referência com UMA única impressão não-reverse -> política por acabamento dessa impressão:
+#   "inferir"        = casa como INFERIDO (margem exibida, nunca COMPRA)
+#   "sem_referencia" = continua SEM referência compatível
+# Mais de uma impressão não-reverse = INCOMPATIVEL (a oferta é de acabamento desconhecido). Hoje: a única
+# impressão normal infere (wiz 76); a única holo fica sem referência (xybsp 187, wiz 9, nbsp 5).
+INCONCLUSIVE_SINGLE_PRINT_POLICY = {"normal": "inferir", "holo": "inferir"}      # decisão do dono 2026-11-24 (opção B)
+
+
+def _may_infer_from_reference(ct_rarity) -> bool:
+    return str(ct_rarity or "").strip().lower() not in NO_INFERENCE_CT_RARITIES
+
+
 class OfferMatch(NamedTuple):
     match: "Match"
     hd: "HoloDetection"
     offer: tuple
+    inferred: Optional[str] = None   # texto da inferência (acabamento deduzido da referência) ou None = DECLARADO
+
+
+def _known(prices: dict) -> dict:
+    """{chave: (edicao, acabamento)} das chaves CANÔNICAS que EXISTEM no produto, com ou sem preço."""
+    return {k: PTCG_KEY_TO_CANON[k] for k in (prices or {}) if k in PTCG_KEY_TO_CANON}
 
 
 def match_offer(prices: dict, first_edition: bool, reverse: bool, ct_rarity: Optional[str],
@@ -336,32 +387,118 @@ def match_offer(prices: dict, first_edition: bool, reverse: bool, ct_rarity: Opt
                 group_name: Optional[str] = None) -> OfferMatch:
     """Caminho INTEIRO: acabamento da oferta (a partir das raridades) + casamento exato.
 
-    Rótulos em conflito (B1f): a raridade da CardTrader é CONCLUSIVA p/ não-holo e a do produto diz
-    holo -> se o produto também tem impressão normal (a cópia não-holo existe) o acabamento NÃO é
-    presumido: INCOMPATIVEL. Só quando o produto não tem impressão normal (a carta só existe em
-    holo: Rayquaza viv 138 "Amazing Rare") vale o holo. CT holo + produto não-holo já dá
-    INCOMPATIVEL pela regra exata."""
+    A existência de uma impressão é dada pela CHAVE no produto, com ou sem preço (um normal sem
+    market hoje continua sendo uma impressão normal que existe).
+
+    DECLARADO: o acabamento sai do rótulo da própria CardTrader (era e set) e a referência tem a chave
+    igual. INFERIDO (`inferred` preenchido; o chamador marca "Inferido" e nunca recomenda compra): a
+    CardTrader diz outra coisa/não diz e o acabamento foi deduzido da referência: (a) raridade
+    CT conclusiva p/ não-holo, produto holo e a carta SEM nenhuma chave normal (Rayquaza viv 138);
+    (b) override de set holo-only (det). Se a carta TEM impressão normal e as raridades divergem =
+    INCOMPATIVEL ("raridades em conflito"); CT inconclusiva + as duas impressões = INCOMPATIVEL."""
+    known = _known(prices)
+    normal_keys = sorted(k for k, c in known.items() if c[1] == FIN_NORMAL)
+    has_holo = any(c[1] == FIN_HOLO for c in known.values())
     hd_ct = holo_detection(ct_rarity, set_released=set_released, set_code=set_code)
-    hd = hd_ct
-    conflict = None
-    if not reverse:
-        if not hd_ct.is_holo:
-            hd_ref = holo_detection(ref_rarity, set_released=set_released)
+    hd, inferred, blocked = hd_ct, None, None
+    if reverse:
+        hd = holo_detection(ct_rarity, ref_rarity, set_released=set_released, set_code=set_code)
+    elif hd_ct.is_holo:
+        if hd_ct.basis == "set":
+            inferred = (f"acabamento holo inferido pelo set {set_code} ({HOLO_ONLY_SETS[set_code.lower()]}); "
+                        f"a CardTrader diz {ct_rarity!r}")
+    elif not rarity_conclusive(ct_rarity) and not _NON_HOLO.search(str(ct_rarity or "").lower()):
+        # B1j-A1: QUALQUER rótulo inconclusivo (vazio, "Promo", "Fixed", desconhecido): a CardTrader NÃO informa
+        # o acabamento -> nada é "declarado"; só a política de única impressão pode inferir (nunca "Sim")
+        labeled = any(c[0] for c in known.values())
+        want_ed = ED_1ST if first_edition else ED_UNL
+        pool = {k: c for k, c in known.items() if c[1] != FIN_REVERSE and (not labeled or c[0] == want_ed)}
+        fins = sorted({c[1] for c in pool.values()})
+        if len(fins) > 1:
+            blocked = (f"acabamento da oferta desconhecido (raridade CardTrader {ct_rarity!r} inconclusiva) e a "
+                       f"carta tem mais de uma impressão não-reverse ({', '.join(sorted(pool))}); não se presume")
+        elif len(fins) == 1 and fins[0] == FIN_NORMAL and INCONCLUSIVE_SINGLE_PRINT_POLICY.get(FIN_NORMAL) == "inferir":
+            hd = HoloDetection(False, False, "")
+            inferred = (f"raridade {ct_rarity if ct_rarity else 'vazia'!r} não informa o acabamento; a referência "
+                        f"só tem a impressão normal")
+        elif len(fins) == 1 and fins[0] == FIN_HOLO and INCONCLUSIVE_SINGLE_PRINT_POLICY.get(FIN_HOLO) == "inferir":
+            hd = HoloDetection(True, False, "")
+            inferred = (f"raridade {ct_rarity if ct_rarity else 'vazia'!r} não informa o acabamento; a referência "
+                        f"só tem a impressão holo")
+        elif len(fins) == 1 and fins[0] == FIN_HOLO and _may_infer_from_reference(ct_rarity):
+            # rótulo desconhecido (não vazio/Promo) + única impressão holo: infere só se o PRODUTO é holo (BREAK)
+            hd_ref = holo_detection(ref_rarity, set_released=set_released, set_code=set_code)
             if hd_ref.is_holo:
-                normal_keys = sorted(k for k, c in _usable(prices).items() if c[1] == FIN_NORMAL)
-                if rarity_conclusive(ct_rarity) and normal_keys:
-                    conflict = (f"raridades em conflito (CardTrader: {ct_rarity!r}; referência: "
-                                f"{ref_rarity!r}) — a carta tem impressão normal ({', '.join(normal_keys)}); "
-                                "o acabamento não é presumido")
-                else:
-                    hd = hd_ref
+                hd = hd_ref
+                inferred = (f"CardTrader {ct_rarity!r} inconclusiva; acabamento holo deduzido da referência "
+                            f"({ref_rarity!r}, sem impressão normal)")
             elif hd_ref.era_missing:
                 hd = HoloDetection(False, True, "")
     else:
-        hd = holo_detection(ct_rarity, ref_rarity, set_released=set_released, set_code=set_code)
+        hd_ref = holo_detection(ref_rarity, set_released=set_released, set_code=set_code)   # exceções de era valem p/ os 2 lados
+        if hd_ref.is_holo:
+            if rarity_conclusive(ct_rarity):
+                if normal_keys:
+                    blocked = (f"raridades em conflito (CardTrader: {ct_rarity!r}; referência: {ref_rarity!r}) — "
+                               f"a carta tem impressão normal ({', '.join(normal_keys)}); o acabamento não é presumido")
+                else:
+                    hd = hd_ref
+                    inferred = (f"CardTrader diz {ct_rarity!r} (não-holo) e a referência diz {ref_rarity!r} (holo); "
+                                "a carta não tem nenhuma impressão normal, então o acabamento foi deduzido da referência")
+            elif normal_keys and has_holo:
+                blocked = (f"acabamento da oferta desconhecido (raridade CardTrader {ct_rarity!r} inconclusiva) e a "
+                           f"carta tem as duas impressões ({', '.join(normal_keys)} e holofoil); não se presume")
+            elif not normal_keys and _may_infer_from_reference(ct_rarity):
+                hd = hd_ref
+                inferred = (f"CardTrader {ct_rarity!r} inconclusiva; acabamento holo deduzido da referência "
+                            f"({ref_rarity!r}, sem impressão normal)")
+        elif hd_ref.era_missing:
+            hd = HoloDetection(False, True, "")
     offer = offer_variant(first_edition, reverse, hd.is_holo)
-    if conflict:
+    if blocked:
         avail = ", ".join(sorted(_usable(prices)))
-        return OfferMatch(Match(None, INCOMPATIVEL, f"{conflict} (disponíveis: {avail})", None), hd, offer)
+        return OfferMatch(Match(None, INCOMPATIVEL, f"{blocked} (disponíveis: {avail})", None), hd, offer, None)
     m = match_reference_variant(prices, *offer, group_name=group_name, era_missing=hd.era_missing)
-    return OfferMatch(m, hd, offer)
+    return OfferMatch(m, hd, offer, inferred if m.status == OK else None)
+
+
+# ─── B1i: colisão de chave no índice da referência ───────────────────────────
+def _norm_name(x) -> str:
+    return re.sub(r"\s+", " ", str(x or "").strip().lower())
+
+
+def _full_number(raw) -> tuple:
+    """'08/53' -> ('8', '53'); '008' -> ('8', None); letras preservadas; zeros à esquerda de cada run
+    numérico removidos (mesma ideia da chave do tcgcsv)."""
+    s = str(raw or "").strip().upper()
+    num, _, den = s.partition("/")
+
+    def z(t):
+        return re.sub(r"(?<!\d)0+(?=\d)", "", t.strip())
+    return (z(num), z(den) if den.strip() else None)
+
+
+def resolve_candidates(cands: list, card_name, collector_number):
+    """Vários PRODUTOS da referência com a mesma chave (numerador). Devolve (candidato|None, motivo).
+
+    Só casa se um dado DECLARADO da oferta desempata de forma inequívoca: (1) número COMPLETO com
+    denominador igual ao do produto; (2) nome EXATO do produto. Critérios que apontam produtos diferentes,
+    ou que não reduzem a lista a exatamente um, = ambígua. Nunca ordem de chegada, preço ou nome parcial."""
+    n = len(cands)
+    if n <= 1:
+        return (cands[0] if cands else None), ""
+    lists = []
+    if "/" in str(collector_number or ""):
+        off_num = _full_number(collector_number)
+        a = [c for c in cands if "/" in str(c.get("number") or "") and _full_number(c.get("number")) == off_num]
+        if a:
+            lists.append(a)
+    b = [c for c in cands if _norm_name(c.get("name")) == _norm_name(card_name)]
+    if b:
+        lists.append(b)
+    if lists:
+        pool = [c for c in cands if all(any(c is x for x in l) for l in lists)]   # todos os critérios aplicáveis concordam
+        if len(pool) == 1:
+            return pool[0], ""
+    names = "; ".join(f"{c.get('name')} [{c.get('number')}]" for c in cands[:4])
+    return None, f"referência ambígua: {n} produtos com a mesma chave ({names}{'…' if n > 4 else ''})"

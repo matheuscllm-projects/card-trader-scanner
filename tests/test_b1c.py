@@ -165,10 +165,10 @@ def test_unpriced_offer_reason_is_not_confused_with_set_outcome():
 
 def test_holo_note_does_not_call_an_edition_key_a_finish():
     from test_b1b_more import _twm_provider
-    prov = _twm_provider([(1, "Holofoil", 5.0)])
+    prov = _twm_provider([(1, "Holofoil", 5.0), (1, "Normal", 2.0)])
     assert prov.market_price_usd("Greninja ex", "twm", "106/167", rarity="Promo") is None
     assert "inconclusiv" in prov.last_ref_reason
-    assert "só tem a chave" in prov.last_ref_reason and "só tem o acabamento" not in prov.last_ref_reason
+    assert "só tem o acabamento" not in prov.last_ref_reason
 
 
 def test_valorization_column_says_what_it_measures():

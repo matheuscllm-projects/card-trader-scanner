@@ -207,7 +207,7 @@ def _compra_row(**overrides):
         "trainer_gallery_potential_fp": False,
         "card_number": "056",
         "set_code": "ex12",
-        "ref_compativel": "Sim", "pc_status": "OK", "pc_vendas_30d": 2, "pc_vendas_90d": 7,
+        "ref_compativel": "Sim", "ref_age_dias": 0.0, "pc_status": "OK", "pc_vendas_30d": 2, "pc_vendas_90d": 7,
         "pc_truncado": False, "compra_inclui_hub": True,
     }
     row.update(overrides)

@@ -278,10 +278,12 @@ def test_det_promo_offer_matches_the_holofoil_reference():
     assert prov.last_ref_status == cv.INCOMPATIVEL
 
 
-def test_promo_in_a_set_that_is_not_holo_only_stays_incompatible():
+def test_promo_in_a_set_that_is_not_holo_only_single_holo_print_is_inferred():
     rows = [{"pid": 1, "name": "X", "number": "106/167", "rarity": "Common", "prices": [["Holofoil", 5.0]]}]
     prov = _real_provider("twm", 23473, "SV06: Twilight Masquerade", "2024-05-24T00:00:00", rows)
-    assert prov.market_price_usd("Greninja ex", "twm", "106/167", rarity="Promo") is None
+    assert prov.market_price_usd("Greninja ex", "twm", "106/167", rarity="Promo") == 5.0      # B1j: política holo = inferir
+    assert prov.last_ref_inferred
+    assert prov.market_price_usd("Greninja ex", "twm", "106/167", foil=True, rarity="Promo") is None
 
 
 def test_fst_alt_art_with_the_cardtrader_typo_matches_holofoil():

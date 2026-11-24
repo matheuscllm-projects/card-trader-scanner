@@ -26,13 +26,14 @@ def _raw(**over):
         "Condição": "NM", "Qtd": 1, "Scan R$ (raw)": 60.0, "TCG Market (BRL)": 100.0,
         "TCG Market (USD)": 18.0, "Validation Status": "NOT_VALIDATED",
         "Variant": "holofoil", "Ref Compatível": "Sim", "Link CardTrader": CT, "Link TCG": TCG, "Edição": "Unlimited",
+        "Data Ref.": __import__("datetime").date.today().isoformat(), "Rótulo Data Ref.": "dado de",
     }
     base.update(over)
     return pd.DataFrame([{k: v for k, v in base.items() if v is not None}])
 
 
 def _enrich(raw, **kw):
-    return pp.enrich_df(raw, **kw)
+    return pp.enrich_df(raw, **kw).assign(ref_age_dias=0.0)
 
 
 def _row(df, i=0):
@@ -215,7 +216,8 @@ def test_cinco_linhas_mesma_referencia_uma_consulta():
     assert calls == [("Lugia", "unl")]
     assert (df["pc_vendas_90d"] == 7).all()
     assert df.attrs["pc_stats"] == {"consultas_unicas": 1, "linhas_atendidas": 5,
-                                    "sem_consulta_limite_refs": 0, "sem_consulta_limite_linhas": 0}
+                                    "sem_consulta_limite_refs": 0, "sem_consulta_limite_linhas": 0,
+                                    "consultas_duplicadas_evitadas": 4, "por_status": {"OK": 1}}
 
 
 def test_edicao_ausente_nao_consulta_e_marca():

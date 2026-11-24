@@ -296,7 +296,7 @@ def _raw_df():
 
 def _enriched(cfg=None):
     cfg = cfg or pp.DecisionConfig()
-    return pp.enrich_df(_raw_df(), hub_fee_rate=cfg.hub_fee_rate), cfg
+    return pp.enrich_df(_raw_df(), hub_fee_rate=cfg.hub_fee_rate).assign(ref_age_dias=0.0), cfg
 
 
 def test_delivery_without_pc_is_unchanged():
@@ -318,7 +318,8 @@ def _pc_enriched():
     raw = _raw_df()
     raw["Edição"] = "Unlimited"
     raw["Ref Compatível"] = "Sim"
-    return pp.enrich_df(raw, hub_fee_rate=0.06), pp.DecisionConfig()
+    raw["Data Ref."], raw["Rótulo Data Ref."] = __import__("datetime").date.today().isoformat(), "dado de"
+    return pp.enrich_df(raw, hub_fee_rate=0.06).assign(ref_age_dias=0.0), pp.DecisionConfig()
 
 
 def _fetch(url, cache_dir=None):
@@ -343,6 +344,7 @@ def test_attach_pc_refs_uses_injected_resolver_and_caps():
 
 def test_delivery_with_pc_columns_and_link():
     df, cfg = _pc_enriched()
+    df["reference_price_usd"] = pcr.median_ungraded_sold(_LUGIA)[0]      # B1k: referências coerentes (senão divergem = REVISAR)
 
     def dem(name, number, set_label, *, edition, cache_dir=None, variant=None):
         if name == "Plusle":

@@ -226,7 +226,7 @@ def _alt(price=None, status=None):
 
 
 def test_fallback_works_both_ways_tcgcsv_first_without_variant_asks_pokemontcg():
-    rows = [(1, "Normal", 3.0), (2, "Normal", 3.0)]           # só Normal: oferta Holo não casa no tcgcsv
+    rows = [(1, "Holofoil", None), (2, "Holofoil", None)]           # só Normal: oferta Holo não casa no tcgcsv
     alt = _alt(price=42.0)
     s = _tcgcsv_primary(rows, alt=alt)
     opps = list(s.scan_expansion(EXP))
@@ -236,7 +236,7 @@ def test_fallback_works_both_ways_tcgcsv_first_without_variant_asks_pokemontcg()
 
 def test_both_sources_without_variant_register_both_reasons():
     alt = _alt(price=None, status=cv.INCOMPATIVEL)
-    s = _tcgcsv_primary([(1, "Normal", 3.0), (2, "Normal", 3.0)], alt=alt)
+    s = _tcgcsv_primary([(1, "Holofoil", None), (2, "Holofoil", None)], alt=alt)
     assert list(s.scan_expansion(EXP)) == []
     r = s.noref_rows[0]
     assert "tcgcsv:" in r["motivo"] and "pokemontcg:" in r["motivo"]
@@ -244,7 +244,7 @@ def test_both_sources_without_variant_register_both_reasons():
 
 def test_degraded_second_source_is_not_called_just_to_fill_the_table():
     alt = _alt(price=42.0)
-    s = _tcgcsv_primary([(1, "Normal", 3.0), (2, "Normal", 3.0)], alt=alt)
+    s = _tcgcsv_primary([(1, "Holofoil", None), (2, "Holofoil", None)], alt=alt)
     s.ptcg_alt_breaker = sc.SourceBreaker()
     s.ptcg_alt_breaker.is_open, s.ptcg_alt_breaker.opened_at = True, datetime(2026, 11, 24, 8, 28)
     s.ptcg_alt_breaker._last_probe = 10 ** 12                   # sonda não vencida
@@ -439,3 +439,65 @@ def test_xy_era_secret_rare_offer_now_matches_holofoil_reference():
              "prices": [["Holofoil", 120.0]]}]
     prov = _real_provider("sts", 1689, "XY - Steam Siege", "2016-08-03T00:00:00", rows)
     assert prov.market_price_usd("Mega Charizard EX", "sts", "107/108", rarity="Secret Rare") == 120.0
+
+
+# ───────── B1g: exceções do corte de era não geram "conflito" ─────────
+_CODE = {1372: "skg", 1419: "rg", 1404: "dx", 1842: "evo"}
+
+
+def _exception_cases():
+    for g in _SEC["groups"]:
+        for number, name, subs in g["exceptions"]:
+            yield pytest.param(g, number, name, subs, id=f"{_CODE[g['gid']]}-{number}")
+
+
+@pytest.mark.parametrize("g,number,name,subs", list(_exception_cases()))
+def test_era_cut_exceptions_match_the_key_that_exists_with_the_references_own_rarity(g, number, name, subs):
+    rows = [{"pid": 1, "name": name, "number": number, "rarity": "Secret Rare",
+             "prices": [[s, 2.0 + i] for i, s in enumerate(subs)]}]
+    code = _CODE[g["gid"]]
+    prov = _real_provider(code, g["gid"], g["group"], g["pub"] + "T00:00:00", rows)
+    px = prov.market_price_usd(name, code, number, rarity="Secret Rare")          # CT diz a MESMA raridade
+    assert "raridades em conflito" not in prov.last_ref_reason
+    if any(s in ("Normal", "Holofoil") for s in subs):
+        assert px is not None and prov.last_variant_used in ("normal", "holofoil")
+    else:                                                                          # só Reverse: oferta reverse casa
+        assert prov.market_price_usd(name, code, number, foil=True, rarity="Secret Rare") is not None
+
+
+def test_evo_real_cards_flying_pikachu_and_doduo_match_the_normal_key():
+    ev = [r for g in _SEC["groups"] if g["gid"] == 1842 for r in g["exceptions"]]
+    rows = [{"pid": i + 1, "name": n, "number": num, "rarity": "Secret Rare", "prices": [["Normal", 1.5 + i]]}
+            for i, (num, n, _s) in enumerate(ev)]
+    prov = _real_provider("evo", 1842, "XY - Evolutions", "2016-11-02T00:00:00", rows)
+    for num, n, _s in ev:
+        assert prov.market_price_usd(n, "evo", num, rarity="Secret Rare") is not None, n
+        assert prov.last_variant_used == "normal"
+
+
+def test_property_same_rarity_on_both_sides_is_never_a_conflict():
+    for rar, keys, era, code in itertools.product(
+            _CT + _REF, _KEYSETS, (None, "2002-01-01", "2008-11-05", "2016-11-02", "2024-05-01"), (None, "evo", "det")):
+        prices = {k: {"market": 1.0 + i} for i, k in enumerate(sorted(keys))}
+        om = cv.match_offer(prices, False, False, rar, ref_rarity=rar, set_released=era, set_code=code)
+        assert "raridades em conflito" not in om.match.reason, (rar, sorted(keys), era, code)
+
+
+def test_conflict_message_only_when_labels_really_diverge_otherwise_names_the_real_problem():
+    prices = {"normal": {"market": 1.0}}
+    om = cv.match_offer(prices, False, False, "Holo Rare", ref_rarity="Holo Rare", set_released="2005-01-01")
+    assert om.match.status == cv.INCOMPATIVEL and "raridades em conflito" not in om.match.reason
+    assert "sem preço" in om.match.reason                                           # diz o problema real
+
+
+def test_breaker_health_sentence_has_correct_singular():
+    s = sc.Scanner.__new__(sc.Scanner)
+    s.breaker = sc.SourceBreaker(window=10, min_samples=2, fail_rate=0.5)
+    s.breaker.record(False, 1.0)
+    s.breaker.record(True, 1.0)
+    assert "após 1 falha em 2" in s._source_health_line() and "1 falhas" not in s._source_health_line()
+    s2 = sc.Scanner.__new__(sc.Scanner)
+    s2.breaker = sc.SourceBreaker(window=10, min_samples=3, fail_rate=0.5)
+    for ok in (False, False, True):
+        s2.breaker.record(ok, 1.0)
+    assert "após 2 falhas em 3" in s2._source_health_line()
