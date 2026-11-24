@@ -1,0 +1,294 @@
+{
+ "_fonte": "tcgcsv.com/tcgplayer/3/{2409 det, 2906 fst, 2701 viv} em 2026-11-24 (products+prices)",
+ "det": [
+  {
+   "pid": 186001,
+   "name": "Bulbasaur (Holo Common)",
+   "number": "1/18",
+   "rarity": "Common",
+   "prices": [
+    [
+     "Holofoil",
+     1.1
+    ]
+   ]
+  },
+  {
+   "pid": 186003,
+   "name": "Ludicolo",
+   "number": "2/18",
+   "rarity": "Rare",
+   "prices": [
+    [
+     "Holofoil",
+     1.13
+    ]
+   ]
+  },
+  {
+   "pid": 186004,
+   "name": "Morelull (Holo Common)",
+   "number": "3/18",
+   "rarity": "Common",
+   "prices": [
+    [
+     "Holofoil",
+     0.27
+    ]
+   ]
+  },
+  {
+   "pid": 186005,
+   "name": "Charmander (Holo Common)",
+   "number": "4/18",
+   "rarity": "Common",
+   "prices": [
+    [
+     "Holofoil",
+     0.73
+    ]
+   ]
+  },
+  {
+   "pid": 186007,
+   "name": "Charizard",
+   "number": "5/18",
+   "rarity": "Holo Rare",
+   "prices": [
+    [
+     "Holofoil",
+     14.47
+    ]
+   ]
+  },
+  {
+   "pid": 186009,
+   "name": "Arcanine",
+   "number": "6/18",
+   "rarity": "Rare",
+   "prices": [
+    [
+     "Holofoil",
+     3.64
+    ]
+   ]
+  },
+  {
+   "pid": 186010,
+   "name": "Psyduck (Holo Common)",
+   "number": "7/18",
+   "rarity": "Common",
+   "prices": [
+    [
+     "Holofoil",
+     1.67
+    ]
+   ]
+  },
+  {
+   "pid": 186012,
+   "name": "Magikarp (Holo Common)",
+   "number": "8/18",
+   "rarity": "Common",
+   "prices": [
+    [
+     "Holofoil",
+     0.92
+    ]
+   ]
+  },
+  {
+   "pid": 186013,
+   "name": "Greninja",
+   "number": "9/18",
+   "rarity": "Holo Rare",
+   "prices": [
+    [
+     "Holofoil",
+     8.67
+    ]
+   ]
+  },
+  {
+   "pid": 186015,
+   "name": "Detective Pikachu",
+   "number": "10/18",
+   "rarity": "Rare",
+   "prices": [
+    [
+     "Holofoil",
+     15.02
+    ]
+   ]
+  },
+  {
+   "pid": 186019,
+   "name": "Mr. Mime",
+   "number": "11/18",
+   "rarity": "Rare",
+   "prices": [
+    [
+     "Holofoil",
+     3.46
+    ]
+   ]
+  },
+  {
+   "pid": 186020,
+   "name": "Mewtwo",
+   "number": "12/18",
+   "rarity": "Holo Rare",
+   "prices": [
+    [
+     "Holofoil",
+     10.91
+    ]
+   ]
+  },
+  {
+   "pid": 186021,
+   "name": "Machamp",
+   "number": "13/18",
+   "rarity": "Rare",
+   "prices": [
+    [
+     "Holofoil",
+     2.12
+    ]
+   ]
+  },
+  {
+   "pid": 186022,
+   "name": "Jigglypuff (Holo Common)",
+   "number": "14/18",
+   "rarity": "Common",
+   "prices": [
+    [
+     "Holofoil",
+     0.71
+    ]
+   ]
+  },
+  {
+   "pid": 186023,
+   "name": "Snubbull (Holo Common)",
+   "number": "15/18",
+   "rarity": "Common",
+   "prices": [
+    [
+     "Holofoil",
+     0.46
+    ]
+   ]
+  },
+  {
+   "pid": 186024,
+   "name": "Lickitung (Holo Common)",
+   "number": "16/18",
+   "rarity": "Common",
+   "prices": [
+    [
+     "Holofoil",
+     0.38
+    ]
+   ]
+  },
+  {
+   "pid": 186025,
+   "name": "Ditto",
+   "number": "17/18",
+   "rarity": "Holo Rare",
+   "prices": [
+    [
+     "Holofoil",
+     11.11
+    ]
+   ]
+  },
+  {
+   "pid": 186026,
+   "name": "Slaking",
+   "number": "18/18",
+   "rarity": "Rare",
+   "prices": [
+    [
+     "Holofoil",
+     1.3
+    ]
+   ]
+  }
+ ],
+ "fst_alt_art": [
+  {
+   "pid": 253171,
+   "name": "Inteleon VMAX (Alternate Art Secret)",
+   "number": "266/264",
+   "rarity": "Secret Rare",
+   "prices": [
+    [
+     "Holofoil",
+     26.09
+    ]
+   ]
+  },
+  {
+   "pid": 253265,
+   "name": "Espeon VMAX (Alternate Art Secret)",
+   "number": "270/264",
+   "rarity": "Secret Rare",
+   "prices": [
+    [
+     "Holofoil",
+     335.36
+    ]
+   ]
+  },
+  {
+   "pid": 253266,
+   "name": "Gengar VMAX (Alternate Art Secret)",
+   "number": "271/264",
+   "rarity": "Secret Rare",
+   "prices": [
+    [
+     "Holofoil",
+     997.53
+    ]
+   ]
+  }
+ ],
+ "viv_138": [
+  {
+   "pid": 226594,
+   "name": "Rayquaza",
+   "number": "138/185",
+   "rarity": "Amazing Rare",
+   "prices": [
+    [
+     "Holofoil",
+     25.0
+    ]
+   ]
+  }
+ ],
+ "viv_rare_summary": {
+  "Normal+Reverse Holofoil": 33
+ },
+ "viv_donphan": [
+  {
+   "pid": 226519,
+   "name": "Donphan",
+   "number": "087/185",
+   "rarity": "Rare",
+   "prices": [
+    [
+     "Reverse Holofoil",
+     0.37
+    ],
+    [
+     "Normal",
+     0.19
+    ]
+   ]
+  }
+ ]
+}

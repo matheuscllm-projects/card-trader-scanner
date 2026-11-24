@@ -236,3 +236,76 @@ def test_run_summary_has_source_totals_retries_time_per_set_and_health_sentence(
     assert "Tempo por set:" in text and "asc" in text
     assert s.set_outcomes[0]["elapsed_s"] >= 0
     assert "Sets atendidos por resgate" in text
+
+
+# ───────── 3: det / fst / viv com dado real (fixture = tcgcsv 2026-11-24) ─────────
+import json as _json  # noqa: E402
+
+import ct_variants as cv  # noqa: E402
+
+_EV = _json.loads((REPO_ROOT / "tests" / "fixtures" / "variants" / "b1e_evidence.json").read_text(encoding="utf-8"))
+
+
+def _real_provider(code, group_id, name, published, rows):
+    """tcgcsv fake com as linhas REAIS (número, raridade do produto, subtypes+preços)."""
+    products = {"results": [
+        {"productId": r["pid"], "name": r["name"], "extendedData": (
+            [{"name": "Number", "value": r["number"]}]
+            + ([{"name": "Rarity", "value": r["rarity"]}] if r.get("rarity") else []))}
+        for r in rows]}
+    prices = {"results": [
+        {"productId": r["pid"], "subTypeName": sub, "marketPrice": mkt, "lowPrice": mkt, "midPrice": mkt}
+        for r in rows for sub, mkt in r["prices"]]}
+    groups = [{"groupId": group_id, "name": name, "abbreviation": code.upper(), "publishedOn": published}]
+    prov = _provider_with(groups, products, prices)
+    assert prov.prefill_set(code, [code], name)
+    return prov
+
+
+def test_evidence_det_is_holofoil_only_in_all_18_cards():
+    """A base de HOLO_ONLY_SETS['det']: 18/18 cartas só têm Holofoil (nenhum Normal/Reverse)."""
+    assert len(_EV["det"]) == 18
+    assert all([s for s, _ in r["prices"]] == ["Holofoil"] for r in _EV["det"])
+    assert "det" in cv.HOLO_ONLY_SETS
+
+
+def test_det_promo_offer_matches_the_holofoil_reference():
+    prov = _real_provider("det", 2409, "Detective Pikachu", "2019-04-05T00:00:00", _EV["det"])
+    px = prov.market_price_usd("Charizard", "det", "05/18", rarity="Promo")      # CT manda 'Promo'
+    assert px == 14.47 and prov.last_variant_used == "holofoil"
+    # reverse nunca casa com a chave holofoil (regra exata intacta)
+    assert prov.market_price_usd("Charizard", "det", "05/18", foil=True, rarity="Promo") is None
+    assert prov.last_ref_status == cv.INCOMPATIVEL
+
+
+def test_promo_in_a_set_that_is_not_holo_only_stays_incompatible():
+    rows = [{"pid": 1, "name": "X", "number": "106/167", "rarity": "Common", "prices": [["Holofoil", 5.0]]}]
+    prov = _real_provider("twm", 23473, "SV06: Twilight Masquerade", "2024-05-24T00:00:00", rows)
+    assert prov.market_price_usd("Greninja ex", "twm", "106/167", rarity="Promo") is None
+
+
+def test_fst_alt_art_with_the_cardtrader_typo_matches_holofoil():
+    assert cv.rarity_is_holo("Special Illustraion Rare")            # grafia REAL da CardTrader (typo)
+    assert cv.rarity_conclusive("Special Illustraion Rare")
+    prov = _real_provider("fst", 2906, "SWSH08: Fusion Strike", "2021-11-12T00:00:00", _EV["fst_alt_art"])
+    assert prov.market_price_usd("Gengar VMAX", "fst", "271/264", rarity="Special Illustraion Rare") == 997.53
+
+
+def test_viv_rare_that_tcgcsv_calls_amazing_rare_matches_holofoil_but_plain_rare_does_not():
+    prov = _real_provider("viv", 2701, "SWSH04: Vivid Voltage", "2020-11-13T00:00:00",
+                          _EV["viv_138"] + _EV["viv_donphan"])
+    # Rayquaza 138/185: CT 'Rare', tcgcsv 'Amazing Rare' (holo por natureza, só Holofoil)
+    assert prov.market_price_usd("Rayquaza", "viv", "138/185", rarity="Rare") == 25.0
+    # Donphan 087/185: 'Rare' de verdade (Normal+Reverse) -> continua Normal, não vira holo
+    assert prov.market_price_usd("Donphan", "viv", "087/185", rarity="Rare") == 0.19
+    assert prov.last_variant_used == "normal"
+    assert _EV["viv_rare_summary"] == {"Normal+Reverse Holofoil": 33}   # 33/33 'Rare' SWSH são não-holo
+
+
+def test_viv_regirock_label_conflict_stays_incompatible():
+    """CT diz Holo Rare, a referência só tem normal+reverse: conflito real, NÃO se afrouxa."""
+    rows = [{"pid": 9, "name": "Regirock", "number": "088/185", "rarity": "Rare",
+             "prices": [["Normal", 0.2], ["Reverse Holofoil", 0.3]]}]
+    prov = _real_provider("viv", 2701, "SWSH04: Vivid Voltage", "2020-11-13T00:00:00", rows)
+    assert prov.market_price_usd("Regirock", "viv", "088/185", rarity="Holo Rare") is None
+    assert prov.last_ref_status == cv.INCOMPATIVEL

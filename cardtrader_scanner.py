@@ -2041,7 +2041,7 @@ class PokemonTcgIoProvider(PricingProvider):
         self.last_normal_market = None
         self._reset_ref()
         foil = bool(foil)
-        pre_holo = ct_variants.rarity_is_holo(rarity)   # só p/ a chave de cache; a decisão final usa a era
+        pre_holo = ct_variants.rarity_is_holo(rarity, set_code=set_code)   # só p/ a chave de cache; a decisão final usa a era
         cache_key = ct_variants.price_cache_key(set_code, collector_number, card_name,
                                                 first_edition, foil, pre_holo)
         cached = self.cache.get_price(cache_key)
@@ -2054,7 +2054,8 @@ class PokemonTcgIoProvider(PricingProvider):
             self.last_normal_market = cached.get("normal_market")
             self.last_ref_data_at = cached.get("ref_data_at")
             hd = ct_variants.holo_detection(rarity, self.last_ptcg_rarity,
-                                            set_released=self.last_set_release_date)
+                                            set_released=self.last_set_release_date,
+                                            set_code=set_code)
             offer = ct_variants.offer_variant(first_edition, foil, hd.is_holo)
             prices = cached.get("prices") or {}
             m = ct_variants.match_reference_variant(prices, *offer, era_missing=hd.era_missing)
@@ -2091,7 +2092,8 @@ class PokemonTcgIoProvider(PricingProvider):
         self.last_normal_market = (tcg.get("normal") or {}).get("market")
 
         hd = ct_variants.holo_detection(rarity, card.get("rarity"),
-                                        set_released=self.last_set_release_date)
+                                        set_released=self.last_set_release_date,
+                                        set_code=set_code)
         offer = ct_variants.offer_variant(first_edition, foil, hd.is_holo)
         m = ct_variants.match_reference_variant(tcg, *offer, era_missing=hd.era_missing)
         self._set_ref(m, tcg, offer, hd.era_missing, rarity)
@@ -2371,7 +2373,7 @@ class TcgCsvFallbackProvider(PricingProvider):
         # v2.28: set pode abranger >1 group (gen = Generations + Radiant
         # Collection). Indexa cada group; se QUALQUER um falhar, aborta o set
         # (índice parcial perderia o guard de colisão abaixo).
-        per_group: list[tuple[dict, dict]] = []
+        per_group: list[tuple[dict, dict, dict]] = []
         group_meta: list[tuple] = []   # (nome do group, publishedOn) — Shadowless / idade do set
         for group_id in group_ids:
             products, f1 = self._get_json(f"{group_id}/products")
@@ -2391,7 +2393,7 @@ class TcgCsvFallbackProvider(PricingProvider):
             group_meta.append((g.get("name") or "", g.get("publishedOn")))
 
         from collections import Counter
-        key_count = Counter(k for idx, _ in per_group for k in idx)
+        key_count = Counter(k for idx, _, _r in per_group for k in idx)
         collisions = {k for k, n in key_count.items() if n > 1}
         if collisions:
             log.warning(
@@ -2401,13 +2403,17 @@ class TcgCsvFallbackProvider(PricingProvider):
         index: dict[str, dict] = {}
         pid_map: dict[str, dict] = {}
         gname_map: dict[str, str] = {}
-        for (idx, pids), (gname, _pub) in zip(per_group, group_meta):
+        rar_all: dict[str, str] = {}
+        for (idx, pids, rars), (gname, _pub) in zip(per_group, group_meta):
             for key, variants in idx.items():
                 if key in collisions:
                     continue
                 index[key] = variants
                 pid_map[key] = pids[key]
                 gname_map[key] = gname
+                if key in rars:
+                    rar_all[key] = rars[key]
+        self.__dict__.setdefault("_rarity_map", {})[ct_set_code] = rar_all
         self.__dict__.setdefault("_group_name", {})[ct_set_code] = gname_map
         dates = sorted(d for d in (ct_variants._iso(p) for _g, p in group_meta) if d)
         self.__dict__.setdefault("_set_released", {})[ct_set_code] = dates[0] if dates else None
@@ -2445,10 +2451,12 @@ class TcgCsvFallbackProvider(PricingProvider):
         return d["_dump_at_val"]
 
     @staticmethod
-    def _index_group(products: dict, prices: dict) -> tuple[dict, dict]:
-        """Índice de UM group tcgcsv: (numerador→variantes, numerador→variante→pid)."""
+    def _index_group(products: dict, prices: dict) -> tuple[dict, dict, dict]:
+        """Índice de UM group tcgcsv: (numerador→variantes, numerador→variante→pid,
+        numerador→raridade do PRODUTO no tcgcsv — B1e: 2ª fonte de rótulo p/ detectar holo)."""
         # productId → numerador do collector number (extendedData "Number")
         num_by_pid: dict[int, str] = {}
+        rar_by_pid: dict[int, str] = {}
         for p in products.get("results") or []:
             pid = p.get("productId")
             if pid is None:
@@ -2456,7 +2464,8 @@ class TcgCsvFallbackProvider(PricingProvider):
             for ed in p.get("extendedData") or []:
                 if ed.get("name") == "Number" and ed.get("value"):
                     num_by_pid[pid] = str(ed["value"])
-                    break
+                elif ed.get("name") == "Rarity" and ed.get("value"):
+                    rar_by_pid[pid] = str(ed["value"])
 
         # productId → {variante TCGplayer: {"market","low","mid"}}
         from collections import defaultdict
@@ -2477,6 +2486,7 @@ class TcgCsvFallbackProvider(PricingProvider):
 
         index: dict[str, dict] = {}
         pid_map: dict[str, dict] = {}
+        rar_map: dict[str, str] = {}
         for pid, num_raw in num_by_pid.items():
             # v2.26: chave por VARIANTE de numeração (letras preservadas) —
             # o digits-only antigo colidia série H / sufixos a/b do e-Card e
@@ -2492,7 +2502,9 @@ class TcgCsvFallbackProvider(PricingProvider):
                 # MESMA escolha last-wins do _set_index → o productId guardado é o
                 # do MESMO card cujo preço será usado. Só identidade p/ link.
                 pid_map[key] = {v: pid for v in variants}
-        return index, pid_map
+                if pid in rar_by_pid:
+                    rar_map[key] = rar_by_pid[pid]
+        return index, pid_map, rar_map
 
     def market_price_usd(self, card_name: str, set_code: str,
                          collector_number: str,
@@ -2527,7 +2539,8 @@ class TcgCsvFallbackProvider(PricingProvider):
         self.last_normal_market = (variants.get("normal") or {}).get("market")
         rel = (self.__dict__.get("_set_released") or {}).get(set_code)
         self.last_set_release_date = rel
-        hd = ct_variants.holo_detection(rarity, set_released=rel)
+        prod_rarity = (self.__dict__.get("_rarity_map") or {}).get(set_code, {}).get(key)
+        hd = ct_variants.holo_detection(rarity, prod_rarity, set_released=rel, set_code=set_code)
         offer = ct_variants.offer_variant(first_edition, foil, hd.is_holo)
         gname = (self.__dict__.get("_group_name") or {}).get(set_code, {}).get(key)
         m = ct_variants.match_reference_variant(variants, *offer, group_name=gname,
@@ -3513,7 +3526,7 @@ class Scanner:
                    reason: Optional[str] = None) -> dict:
         pa = self._pa
         offer = pa(provider, "last_offer_variant", tuple, None) or ct_variants.offer_variant(
-            l.first_edition, bool(l.foil), ct_variants.rarity_is_holo(l.rarity))
+            l.first_edition, bool(l.foil), ct_variants.rarity_is_holo(l.rarity, set_code=l.set_code))
         row = {
             "set": exp_code, "set_name": l.set_name, "card": l.card_name,
             "number": l.collector_number, "rarity": l.rarity,
@@ -3627,7 +3640,7 @@ class Scanner:
             reason = {"miss": "sem_referencia_na_fonte", "failure": "falha_operacional",
                       "not_reached": "nao_alcancado"}.get(cause, cause)
             ed, fin = ct_variants.offer_variant(
-                l.first_edition, bool(l.foil), ct_variants.rarity_is_holo(l.rarity))
+                l.first_edition, bool(l.foil), ct_variants.rarity_is_holo(l.rarity, set_code=l.set_code))
             row = {
                 "set": exp_code, "set_name": l.set_name, "card": l.card_name,
                 "number": l.collector_number, "ct_price_brl": round(l.price_brl, 2),
@@ -4225,7 +4238,8 @@ class Scanner:
         if not isinstance(set_release, str):
             set_release = ""
         is_holo_card = ct_variants.rarity_is_holo(l.rarity, ptcg_rarity,
-                                                  set_released=set_release or None)
+                                                  set_released=set_release or None,
+                                                  set_code=l.set_code)
         variant_low_conf = (
             l.foil is False
             and not is_holo_card
