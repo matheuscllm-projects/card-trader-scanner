@@ -377,9 +377,11 @@ def test_a_pokemontcg_priced_set_never_invokes_tcgcsv():
     assert all((o.price_source or "pokemontcg") == "pokemontcg" for o in opps)
 
 
-def test_e_no_fallback_when_pokemontcg_has_any_hit():
-    """Cobertura PARCIAL: pokemontcg precifica 1 dos 2 cards → tcgcsv NÃO entra
-    (a regra é set_tcg_hits == 0, não 'completar buracos por-card')."""
+def test_e_fallback_consulted_for_misses_even_when_pokemontcg_has_hit():
+    """Lote 3 (decisão 3, substitui o antigo 'tcgcsv NÃO entra com hit prévio'):
+    pokemontcg precifica 1 dos 2 cards → o miss (Card B) É oferecido ao tcgcsv.
+    Aqui o tcgcsv também não tem a carta → B continua sem preço, NÃO some
+    (fica em unpriced_rows) e nada é rotulado como resgatado."""
     listings = [
         _listing("Card A", "001/100", set_code="dri", rarity="Holo Rare"),
         _listing("Card B", "002/100", set_code="dri", rarity="Holo Rare"),
@@ -390,10 +392,10 @@ def test_e_no_fallback_when_pokemontcg_has_any_hit():
         tcgcsv, listings, max_misses=1,
     )
     opps = _run_scan_expansion(scanner, listings)
-    # só A vira opp; tcgcsv não roda (houve hit no set)
     assert [o.listing.card_name for o in opps] == ["Card A"]
-    tcgcsv.session.get.assert_not_called()
-    assert scanner.stats["tcgcsv_fallback_sets"] == 0
+    assert tcgcsv.session.get.called  # miss do fim do set foi oferecido ao tcgcsv
+    assert scanner.stats["tcgcsv_fallback_sets"] == 0  # nada resgatado
+    assert [r["card"] for r in scanner.unpriced_rows] == ["Card B"]
 
 
 def test_a_opt_out_disables_fallback():

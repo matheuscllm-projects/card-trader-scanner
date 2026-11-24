@@ -64,33 +64,12 @@ def test_no_coverage_skip_entry_expires_after_ttl():
     assert sc._skip_entry_is_expired(fresh) is False
 
 
-# ── #5: erro de rede CT = transiente, não unexpected_error_ ────────────────
-def test_network_error_gets_transient_skip_reason(tmp_path, monkeypatch):
-    s = _scanner(tmp_path, monkeypatch)
-
-    def boom(exp):
-        raise requests.ConnectionError("CT: esgotou 3 tentativas")
-        yield  # pragma: no cover  (torna a função um generator)
-
-    s.scan_expansion = boom
-    s.scan([{"id": 1, "code": "aq", "name": "Aquapolis"}])
-    entry = json.loads((tmp_path / "skip.json").read_text(encoding="utf-8"))["reasons"]["aq"]
-    assert entry["reason"].startswith("network_error_"), entry
-    assert sc._skip_entry_is_expired(_old_entry(entry["reason"])) is True
-
-
-def test_unexpected_error_stays_permanent(tmp_path, monkeypatch):
-    s = _scanner(tmp_path, monkeypatch)
-
-    def boom(exp):
-        raise ValueError("schema drift")
-        yield  # pragma: no cover
-
-    s.scan_expansion = boom
-    s.scan([{"id": 1, "code": "aq", "name": "Aquapolis"}])
-    entry = json.loads((tmp_path / "skip.json").read_text(encoding="utf-8"))["reasons"]["aq"]
-    assert entry["reason"].startswith("unexpected_error_"), entry
-    assert sc._skip_entry_is_expired(_old_entry(entry["reason"])) is False
+# ── #5 (superado pelo Lote 3): erro de rede/inesperado NUNCA vai à skip-list ──
+# Cobertura nova em tests/test_set_outcomes.py (network_error_/unexpected_error_
+# viram operational_failure sem skip-list). Entradas ANTIGAS na skip-list seguem
+# lidas e expiram normalmente (no_coverage_/network_error_ são transientes).
+def test_old_network_error_entry_in_skiplist_still_expires():
+    assert sc._skip_entry_is_expired(_old_entry("network_error_ConnectionError")) is True
 
 
 # ── #11: set_complete registra status ──────────────────────────────────────
@@ -102,13 +81,13 @@ def _run_with_checkpoint(s, tmp_path, exp):
     return [d for d in lines if d.get("_type") == "set_complete"]
 
 
-def test_set_complete_marks_aborted_set_with_reason(tmp_path, monkeypatch):
+def test_set_complete_marks_failed_set_with_reason(tmp_path, monkeypatch):
     s = _scanner(tmp_path, monkeypatch)
     s.ct.list_blueprints.side_effect = TimeoutError("deadline")
     done = _run_with_checkpoint(s, tmp_path, {"id": 7, "code": "cg", "name": "EX Crystal Guardians"})
     assert len(done) == 1
-    assert done[0]["status"] == "aborted", done[0]
-    assert done[0]["abort_reason"].startswith("ct_blueprints_timeout_"), done[0]
+    assert done[0]["status"] == "operational_failure", done[0]
+    assert done[0]["reason"].startswith("ct_blueprints_timeout_"), done[0]
 
 
 def test_set_complete_marks_finished_set_complete(tmp_path, monkeypatch):
@@ -118,7 +97,7 @@ def test_set_complete_marks_finished_set_complete(tmp_path, monkeypatch):
     done = _run_with_checkpoint(s, tmp_path, {"id": 7, "code": "cg", "name": "EX Crystal Guardians"})
     assert len(done) == 1
     assert done[0]["status"] == "complete", done[0]
-    assert done[0].get("abort_reason") is None
+    assert done[0].get("reason") is None
 
 
 def test_write_set_complete_legacy_call_defaults_to_complete(tmp_path):

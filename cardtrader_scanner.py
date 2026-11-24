@@ -1132,6 +1132,10 @@ class Opportunity:
     # postprocess — em vez de serem descartadas no scan (o que esvaziava a
     # entrega). NÃO conta como "oportunidade" no funil; é referência near-miss.
     below_threshold: bool = False
+    # Lote 3: data/hora (ISO, local) em que a REFERÊNCIA de preço foi obtida
+    # NESTE run (pokemontcg.io: consulta; tcgcsv: prefill do set). "" se a fonte
+    # não informa. Acompanha `price_source` (fonte) em toda linha.
+    price_fetched_at: str = ""
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1243,7 +1247,7 @@ class Cache:
         return {"market_usd": market, "low_usd": low, "mid_usd": mid,
                 "tcg_url": tcg_url, "variant_used": variant_used,
                 "ptcg_rarity": ptcg_rarity, "set_release_date": set_release_date,
-                "normal_market": normal_market}
+                "normal_market": normal_market, "fetched_at": fetched_at}
 
     def set_price(self, key: str, market: float, low: float, mid: float, raw: dict):
         self.db.execute(
@@ -2016,6 +2020,7 @@ class PokemonTcgIoProvider(PricingProvider):
         # v2.8 Layer 4: reset last_variant_used também.
         self.last_tcg_url = None
         self.last_variant_used = None
+        self.last_price_fetched_at = None  # Lote 3: data/hora da referência
         # v2.13 (valorização): metadados pra score + chase tier. Reset a cada
         # chamada pra evitar carry-over do card anterior.
         self.last_ptcg_rarity = None
@@ -2036,6 +2041,7 @@ class PokemonTcgIoProvider(PricingProvider):
                      f"{collector_number}:{card_name}:foil={foil}")
         cached = self.cache.get_price(cache_key)
         if cached:
+            self.last_price_fetched_at = cached.get("fetched_at")
             self.last_tcg_url = cached.get("tcg_url")
             self.last_variant_used = cached.get("variant_used")
             self.last_ptcg_rarity = cached.get("ptcg_rarity")
@@ -2142,6 +2148,7 @@ class PokemonTcgIoProvider(PricingProvider):
         except (TypeError, AttributeError):
             pass
         self.cache.set_price(cache_key, market, low, mid, card)
+        self.last_price_fetched_at = datetime.now().isoformat(timespec="seconds")
         return market
 
 
@@ -2337,6 +2344,10 @@ class TcgCsvFallbackProvider(PricingProvider):
         # {id}) da variante priceada: tapa o furo do contrato de 2 links nos sets
         # de fallback E dá a chave de join pro DoubleHolo. NÃO afeta preço/margem.
         self._pid_index: dict[str, dict] = {}
+        # Lote 3: setcode CT → data/hora (ISO) do prefill deste run.
+        self._fetched_at: dict[str, str] = {}
+        self.last_prefill_status: Optional[str] = None
+        self.last_price_fetched_at: Optional[str] = None
         # último source rotulado (sempre "tcgcsv" quando este provider responde).
         self.last_price_source: Optional[str] = None
 
@@ -2359,13 +2370,19 @@ class TcgCsvFallbackProvider(PricingProvider):
 
         Retorna True se ≥1 card foi indexado; False se sem groupId/rede falhou
         (caller então não tem o que reprecificar). Roda no máx. 1× por set."""
+        # Lote 3: `last_prefill_status` separa lacuna da FONTE ("no_group": o
+        # tcgcsv respondeu e não tem o set) de FALHA OPERACIONAL ("fetch_failed":
+        # rede/5xx — tentar de novo). Só "ok" devolve True.
+        self.last_prefill_status = "ok" if self._set_index.get(ct_set_code) else "no_group"
         if ct_set_code in self._set_index:
             return bool(self._set_index[ct_set_code])
         if not self._groups_fetched:
             self._groups = tcgcsv_fetch_groups(self.session)
-            self._groups_fetched = True
+            # só marca como buscado se DEU CERTO: uma falha transitória não pode
+            # condenar todos os sets seguintes do run a "sem referência".
+            self._groups_fetched = bool(self._groups)
         if not self._groups:
-            self._set_index[ct_set_code] = {}
+            self.last_prefill_status = "fetch_failed"
             return False
         group_ids = resolve_tcgcsv_group_ids(
             ct_set_code, ptcg_setcodes, set_name, self._groups
@@ -2376,6 +2393,7 @@ class TcgCsvFallbackProvider(PricingProvider):
                 f"(ptcg={ptcg_setcodes}, name={set_name!r}) — fallback pulado"
             )
             self._set_index[ct_set_code] = {}
+            self.last_prefill_status = "no_group"
             return False
 
         # v2.28: set pode abranger >1 group (gen = Generations + Radiant
@@ -2386,7 +2404,9 @@ class TcgCsvFallbackProvider(PricingProvider):
             products = self._get_json(f"{group_id}/products")
             prices = self._get_json(f"{group_id}/prices")
             if not products or not prices:
-                self._set_index[ct_set_code] = {}
+                # falha de rede/HTTP: NÃO cacheia o set como vazio (um retry
+                # no mesmo run ainda pode funcionar) e sinaliza falha operacional.
+                self.last_prefill_status = "fetch_failed"
                 return False
             per_group.append(self._index_group(products, prices))
 
@@ -2408,6 +2428,8 @@ class TcgCsvFallbackProvider(PricingProvider):
                 pid_map[key] = pids[key]
         self._set_index[ct_set_code] = index
         self._pid_index[ct_set_code] = pid_map
+        self.__dict__.setdefault("_fetched_at", {})[ct_set_code] = datetime.now().isoformat(timespec="seconds")
+        self.last_prefill_status = "ok" if index else "no_group"
         if index:
             # v2.26: a mesma classe atende fallback (v2.23) e primário
             # (--provider tcgcsv) — mensagem neutra quanto ao papel.
@@ -2481,6 +2503,7 @@ class TcgCsvFallbackProvider(PricingProvider):
         self.last_set_release_date = None
         self.last_price_source = None
         self.last_normal_market = None
+        self.last_price_fetched_at = None
 
         index = self._set_index.get(set_code)
         if not index:
@@ -2512,6 +2535,7 @@ class TcgCsvFallbackProvider(PricingProvider):
             return None
         self.last_variant_used = chosen_variant
         self.last_price_source = "tcgcsv"
+        self.last_price_fetched_at = getattr(self, "_fetched_at", {}).get(set_code)
         # v2.25: link TCGplayer real (product page) da variante priceada. Antes
         # ficava None → linha de fallback saía sem [TCG] (furo do contrato de 2
         # links) e sem chave de join DH. productId vem do MESMO card priceado.
@@ -3008,7 +3032,9 @@ class CheckpointWriter:
 
     def write_set_complete(self, set_code: str, set_name: str,
                             per_set_stats: dict, elapsed_s: float,
-                            abort_reason: Optional[str] = None,
+                            status: str = "complete",
+                            reason: Optional[str] = None,
+                            unpriced: int = 0,
                             note: Optional[str] = None) -> None:
         if not self.enabled:
             return
@@ -3021,10 +3047,13 @@ class CheckpointWriter:
             "priced": per_set_stats.get("priced", 0),
             "opps_found": per_set_stats.get("opps_found", 0),
             "elapsed_s": round(elapsed_s, 2),
-            # Lote 1: distingue set completo de set abortado (timeout/no_coverage).
-            # Checkpoints antigos não têm estes campos → leitores tratam como complete.
-            "status": "aborted" if abort_reason else "complete",
-            "abort_reason": abort_reason,
+            # Lote 3: desfecho do set — "complete" | "no_coverage" (a fonte
+            # respondeu e não tem as cartas) | "operational_failure" (rede/5xx/
+            # timeout/erro: tentar de novo). `unpriced` = listings do set sem
+            # referência. Checkpoints antigos não têm estes campos → complete.
+            "status": status,
+            "reason": reason,
+            "unpriced": unpriced,
             "note": note,
         })
         self._sets_written += 1
@@ -3315,7 +3344,9 @@ class Scanner:
 
     def _check_set_timeout(self, set_start: float, exp_code: str, exp_name: str,
                             stage: str, timeout_s: Optional[float] = None) -> bool:
-        """Retorna True se set deve abortar. Loga + marca skip-list quando True.
+        """Retorna True se set deve abortar. Timeout é FALHA OPERACIONAL: nunca
+        entra na skip-list (Lote 3) — o set aparece como "não concluído, tentar
+        de novo".
         v2.8 (Codex H2): chamado antes de cada call externa do set.
         v2.14: aceita timeout_s explícito (o EFETIVO do set, c/ override). Quando
         None, cai no self.per_set_timeout_s (retrocompat p/ chamadas diretas)."""
@@ -3327,26 +3358,140 @@ class Scanner:
             log.error(
                 f"  ⏱️  TIMEOUT set {exp_code} ({exp_name}) at stage='{stage}': "
                 f"{elapsed/60:.1f}min > {effective/60:.1f}min limite. "
-                f"Abortando."
+                f"Abortando (falha operacional — NÃO vai pra skip-list)."
             )
             self.stats["expansions_timed_out"] += 1
-            self._set_abort_reason = f"per_set_timeout_{int(effective)}s_at_{stage}"
-            try:
-                add_to_skip_list(
-                    exp_code,
-                    f"per_set_timeout_{int(effective)}s_at_{stage}",
-                )
-            except Exception as e:
-                log.warning(f"  Falha ao gravar skip-list ({exp_code}): {e}")
+            self._set_outcome("operational_failure",
+                              f"per_set_timeout_{int(effective)}s_at_{stage}")
             return True
         return False
+
+    # ── Lote 3: desfecho por set ───────────────────────────────────────────
+    def _set_outcome(self, status: str, reason: Optional[str] = None,
+                     note: Optional[str] = None) -> None:
+        """status ∈ complete | no_coverage | operational_failure."""
+        self._set_status = status
+        self._set_reason = reason
+        if note is not None:
+            self._set_note = note
+
+    def _record_unpriced(self, exp_code: str, listings: list["Listing"],
+                         causes: dict, detail: Optional[str]) -> None:
+        """Guarda cada listing sem referência (nada some em silêncio)."""
+        if not hasattr(self, "unpriced_rows"):
+            self.unpriced_rows = []
+        for l in listings:
+            cause = causes.get(l.uid, "not_reached")
+            reason = {"miss": "sem_cobertura", "failure": "falha_operacional",
+                      "not_reached": "nao_alcancado"}.get(cause, cause)
+            self.unpriced_rows.append({
+                "set": exp_code, "set_name": l.set_name, "card": l.card_name,
+                "number": l.collector_number, "ct_price_brl": round(l.price_brl, 2),
+                "seller": l.seller_username, "link": l.cardtrader_url,
+                "reason": reason, "detail": detail or "",
+            })
+
+    def _rescue_via_tcgcsv(self, exp_code: str, exp_name: str,
+                           listings: list["Listing"]):
+        """Reprecifica `listings` via tcgcsv (referência buscada NESTE run, mesma
+        escada de variante). Retorna (opps, uids_precificados). Os uids contam
+        como resolvidos mesmo se `_build_opportunity` descartar a linha por
+        filtro explícito (--opportunities-only/--chase-only)."""
+        set_name = listings[0].set_name if listings else ""
+        ok = self.tcgcsv.prefill_set(exp_code, self._ptcg_setcodes_for(exp_code), set_name)
+        if not ok:
+            log.warning(
+                f"  tcgcsv sem referência p/ {exp_code} "
+                f"({getattr(self.tcgcsv, 'last_prefill_status', '?')}) — "
+                f"{len(listings)} listings seguem sem preço"
+            )
+            return [], set()
+        out: list["Opportunity"] = []
+        handled: set = set()
+        for l in listings:
+            try:
+                price = self.tcgcsv.market_price_usd(
+                    l.card_name, l.set_code, l.collector_number,
+                    foil=l.foil, rarity=l.rarity,
+                )
+            except Exception as e:  # noqa: BLE001
+                log.debug(f"  tcgcsv pricing falhou {l.card_name}: {e!r}")
+                continue
+            if not price or price <= 0:
+                continue
+            handled.add(l.uid)
+            opp = self._build_opportunity(l, price, self.tcgcsv)
+            if opp is not None:
+                out.append(opp)
+        if handled:
+            self.stats["tcgcsv_fallback_sets"] = self.stats.get("tcgcsv_fallback_sets", 0) + 1
+            self.stats["tcgcsv_fallback_priced"] = self.stats.get("tcgcsv_fallback_priced", 0) + len(handled)
+            log.info(
+                f"  🛟 tcgcsv precificou {len(handled)} de {len(listings)} listings "
+                f"sem preço da fonte principal em {exp_code} ({exp_name})"
+            )
+        return out, handled
+
+    def _conclude_set(self, exp_code: str, exp_name: str, pending: list["Listing"],
+                      causes: dict, total: int, hits: int,
+                      abort_kind: Optional[str] = None,
+                      abort_reason: Optional[str] = None):
+        """Fecha o set: resgata via tcgcsv o que a fonte principal não precificou
+        (misses, falhas e o que não foi alcançado), registra o que ficou sem
+        preço e define o desfecho. Generator: yield das Opportunities resgatadas.
+
+        abort_kind: None (fim natural) | "operational" (timeout/mass failure) |
+        "coverage" (corte por misses consecutivos). Skip-list SÓ no corte por
+        cobertura E quando nada do set foi precificado (nem pela fonte principal
+        nem pelo resgate) — ausência efetiva de cobertura."""
+        handled: set = set()
+        if pending and self._tcgcsv_can_fallback():
+            opps, handled = self._rescue_via_tcgcsv(exp_code, exp_name, pending)
+            yield from opps
+        left = [l for l in pending if l.uid not in handled]
+        rescued = len(handled)
+        note = (f"tcgcsv_rescue_priced_{rescued}_of_{len(pending)}"
+                if rescued else None)
+        if note:
+            self._set_note = note
+        fail_left = [l for l in left if causes.get(l.uid) == "failure"]
+        if abort_kind == "operational":
+            status, reason = "operational_failure", abort_reason
+        elif fail_left:
+            status, reason = "operational_failure", f"pricing_failures_{len(fail_left)}_unrescued"
+        elif left:
+            status = "no_coverage"
+            reason = abort_reason or f"{len(left)}_of_{total}_without_reference"
+        else:
+            status, reason = "complete", None
+        self._set_outcome(status, reason)
+        self._set_unpriced = len(left)
+        if left:
+            self._record_unpriced(exp_code, left, causes, reason)
+            log.warning(
+                f"  ⚠️  {exp_code}: {len(left)} de {total} listings SEM preço "
+                f"({status}{': ' + reason if reason else ''}) — listados na aba 'Sem preço'"
+            )
+        if status != "operational_failure":
+            self.stats["expansions_scanned"] += 1
+        if abort_kind == "coverage" and status == "no_coverage":
+            self.stats["expansions_no_coverage_abort"] += 1
+            if hits + rescued == 0:
+                try:
+                    add_to_skip_list(exp_code, abort_reason or "no_coverage")
+                except Exception as ee:
+                    log.warning(f"  Falha ao gravar skip-list ({exp_code}): {ee}")
 
     def scan_expansion(self, expansion: dict) -> Iterator[Opportunity]:
         exp_id = expansion["id"]
         exp_code = expansion.get("code", "")
         exp_name = expansion.get("name", "")
-        self._set_abort_reason: Optional[str] = None  # Lote 1: motivo se abortar
-        self._set_note: Optional[str] = None  # Lote 2: ex.: resgate tcgcsv parcial
+        # Lote 3: desfecho do set (lido por scan() p/ o set_complete e o resumo)
+        self._set_status: str = "complete"
+        self._set_reason: Optional[str] = None
+        self._set_unpriced: int = 0
+        self._set_total: int = 0
+        self._set_note: Optional[str] = None
         log.info(f"→ Scan: {exp_name} ({exp_code}) [id={exp_id}]")
         # v2.4: marca início pra wall-clock timeout no pricing loop
         set_start = time.monotonic()
@@ -3379,14 +3524,8 @@ class Scanner:
         except TimeoutError as e:
             log.error(f"  ⏱️  CT blueprints timeout para {exp_code}: {e}")
             self.stats["expansions_timed_out"] += 1
-            self._set_abort_reason = f"ct_blueprints_timeout_{int(effective_timeout_s or 0)}s"
-            try:
-                add_to_skip_list(
-                    exp_code,
-                    f"ct_blueprints_timeout_{int(effective_timeout_s or 0)}s",
-                )
-            except Exception as ee:
-                log.warning(f"  Falha ao gravar skip-list ({exp_code}): {ee}")
+            self._set_outcome("operational_failure",
+                              f"ct_blueprints_timeout_{int(effective_timeout_s or 0)}s")
             return
         bp_index = {bp["id"]: bp for bp in blueprints}
         log.info(f"  {len(blueprints)} blueprints carregados")
@@ -3408,14 +3547,8 @@ class Scanner:
         except TimeoutError as e:
             log.error(f"  ⏱️  CT listings timeout para {exp_code}: {e}")
             self.stats["expansions_timed_out"] += 1
-            self._set_abort_reason = f"ct_listings_timeout_{int(effective_timeout_s or 0)}s"
-            try:
-                add_to_skip_list(
-                    exp_code,
-                    f"ct_listings_timeout_{int(effective_timeout_s or 0)}s",
-                )
-            except Exception as ee:
-                log.warning(f"  Falha ao gravar skip-list ({exp_code}): {ee}")
+            self._set_outcome("operational_failure",
+                              f"ct_listings_timeout_{int(effective_timeout_s or 0)}s")
             return
         self.stats["listings_fetched"] += len(raw_listings)
         log.info(f"  {len(raw_listings)} listings {lang.upper()} encontrados")
@@ -3451,44 +3584,62 @@ class Scanner:
         log.info(f"  {len(best_by_uid)} listings após filtros (NM, {lang.upper()}, não-graded, ≥${self.min_price_usd})")
 
         # v2.26: provider PRIMÁRIO tcgcsv é bulk-por-set — sem prefill, todo
-        # market_price_usd devolve None e o set inteiro viraria miss (40 misses
-        # → abort no_coverage injusto). Prefill 1× por set (idempotente).
-        # Se o set NÃO resolve no tcgcsv (sem groupId único / sem dados),
-        # aborta o set SEM gravar skip-list: no_coverage_* é PERMANENTE e o
-        # gap aqui é do tcgcsv, não do set — gravar condenaria o set também
-        # pros runs pokemontcg, que podem cobri-lo normalmente. O set sai
-        # rotulado sem referência de preço; nunca inventado.
+        # market_price_usd devolve None. Lote 3: distingue lacuna da FONTE
+        # ("no_group": o tcgcsv respondeu e não tem o set → no_coverage, sem
+        # skip-list) de FALHA OPERACIONAL ("fetch_failed": rede/5xx → tentar de
+        # novo). Em ambos os casos os listings ficam registrados (aba "Sem preço").
+        all_listings = list(best_by_uid.values())
+        self._set_total = len(all_listings)
         if isinstance(self.pricing, TcgCsvFallbackProvider) and best_by_uid:
-            first_listing = next(iter(best_by_uid.values()))
+            first_listing = all_listings[0]
             if not self.pricing.prefill_set(
                 exp_code, self._ptcg_setcodes_for(exp_code),
                 first_listing.set_name or exp_name,
             ):
-                log.warning(
-                    f"  🕳️  tcgcsv (primário) sem groupId único/dados p/ "
-                    f"{exp_code} ({exp_name}) — set sem referência de preço "
-                    f"neste run (skip-list NÃO gravada: gap é do tcgcsv, "
-                    f"não do set)."
-                )
-                self.stats["expansions_no_coverage_abort"] += 1
-                self._set_abort_reason = "tcgcsv_primary_no_group_id"
+                st = getattr(self.pricing, "last_prefill_status", None)
+                if st == "fetch_failed":
+                    log.warning(
+                        f"  🔌 tcgcsv (primário) FALHOU ao buscar {exp_code} "
+                        f"({exp_name}) — falha operacional, tentar de novo."
+                    )
+                    yield from self._conclude_set(
+                        exp_code, exp_name, all_listings, {}, len(all_listings), 0,
+                        abort_kind="operational", abort_reason="tcgcsv_fetch_failed")
+                else:
+                    log.warning(
+                        f"  🕳️  tcgcsv (primário) sem groupId único/dados p/ "
+                        f"{exp_code} ({exp_name}) — set sem referência de preço "
+                        f"neste run (skip-list NÃO gravada: gap é do tcgcsv, "
+                        f"não do set)."
+                    )
+                    self.stats["expansions_no_coverage_abort"] += 1
+                    yield from self._conclude_set(
+                        exp_code, exp_name, all_listings,
+                        {l.uid: "miss" for l in all_listings}, len(all_listings), 0,
+                        abort_reason="tcgcsv_primary_no_group_id")
                 return
 
         # Para cada listing filtrado, busca preço TCG e calcula margem
-        total_listings = len(best_by_uid)
+        total_listings = len(all_listings)
         # v2.9 (Codex H5): contadores per-set pra detectar mass pricing failure
         set_pricing_attempts = 0
         set_pricing_failures = 0
         # v2.13 (frente eficiência): contador de "misses" consecutivos (preço
         # não encontrado na fonte) pra cortar sets sem cobertura cedo.
         set_consecutive_misses = 0
-        # v2.23: total de hits pokemontcg no set + lista de listings sem preço.
-        # O fallback tcgcsv SÓ entra quando set_tcg_hits == 0 (set inteiro sem
-        # cobertura na pokemontcg.io — caso asc). Se houve ≥1 hit, o default path
-        # segue intacto e o tcgcsv nunca roda pro set.
         set_tcg_hits = 0
+        # Lote 3: tudo que a fonte principal não precificou — misses (a fonte
+        # respondeu sem a carta) e falhas (exceção) — vai pro resgate tcgcsv e,
+        # se ainda sobrar, pra aba "Sem preço". Nada some.
         set_misses: list["Listing"] = []
-        for i, l in enumerate(best_by_uid.values(), 1):
+        set_failed: list["Listing"] = []
+        causes: dict[str, str] = {}
+
+        def _pending(upto: int) -> list["Listing"]:
+            """misses + falhas + listings ainda não alcançados (a partir de `upto`)."""
+            return set_misses + set_failed + all_listings[upto:]
+
+        for i, l in enumerate(all_listings, 1):
             # v2.4: wall-clock timeout check antes de cada call de pricing
             # v2.14: usa o timeout EFETIVO do set (com override vintage).
             if effective_timeout_s and (time.monotonic() - set_start) > effective_timeout_s:
@@ -3496,11 +3647,14 @@ class Scanner:
                 log.error(
                     f"  ⏱️  TIMEOUT set {exp_code} ({exp_name}): {elapsed/60:.1f}min "
                     f"> {effective_timeout_s/60:.1f}min limite. Abortando após "
-                    f"{i-1}/{total_listings} listings priced."
+                    f"{i-1}/{total_listings} listings priced (falha operacional — "
+                    f"NÃO vai pra skip-list)."
                 )
                 self.stats["expansions_timed_out"] += 1
-                self._set_abort_reason = f"per_set_timeout_{int(effective_timeout_s)}s_at_{i-1}_of_{total_listings}"
-                add_to_skip_list(exp_code, f"per_set_timeout_{int(effective_timeout_s)}s_at_{i-1}_of_{total_listings}")
+                yield from self._conclude_set(
+                    exp_code, exp_name, _pending(i - 1), causes, total_listings,
+                    set_tcg_hits, abort_kind="operational",
+                    abort_reason=f"per_set_timeout_{int(effective_timeout_s)}s_at_{i-1}_of_{total_listings}")
                 return
             if i % 50 == 0 or i == total_listings:
                 log.info(f"  Pricing progress: {i}/{total_listings} listings consultados")
@@ -3514,6 +3668,7 @@ class Scanner:
                     self._checkpoint.write_progress(exp_code, i, total_listings)
             set_pricing_attempts += 1
             tcg_market = None
+            failed = False
             try:
                 tcg_market = self.pricing.market_price_usd(
                     l.card_name, l.set_code, l.collector_number,
@@ -3527,6 +3682,7 @@ class Scanner:
                 log.debug(f"  Pricing transient {l.card_name}: {type(e).__name__}: {e}")
                 set_pricing_failures += 1
                 self.stats["pricing_failures"] += 1
+                failed = True
             except Exception as e:
                 # v2.9 (Codex H5): erros DESCONHECIDOS = WARNING + counter.
                 # Pre-fix: log.debug + swallow → schema drift / SSL / JSON parse
@@ -3537,10 +3693,13 @@ class Scanner:
                 )
                 set_pricing_failures += 1
                 self.stats["pricing_failures"] += 1
+                failed = True
+            if failed:
+                set_failed.append(l)
+                causes[l.uid] = "failure"
 
-            # v2.9: detecção de mass pricing failure → aborta set + skip-list.
-            # Trigger só após sample mínimo pra evitar falso abort em sets
-            # com poucos cards.
+            # v2.9: detecção de mass pricing failure → falha OPERACIONAL do set
+            # (Lote 3: nunca skip-list). Trigger só após sample mínimo.
             if (
                 set_pricing_attempts >= self.mass_pricing_failure_min_sample
                 and (set_pricing_failures / set_pricing_attempts) > self.mass_pricing_failure_threshold
@@ -3549,92 +3708,39 @@ class Scanner:
                 log.error(
                     f"  💥 MASS PRICING FAILURE em {exp_code} ({exp_name}): "
                     f"{set_pricing_failures}/{set_pricing_attempts} ({fail_pct:.0f}%) "
-                    f"falharam. Abortando set."
+                    f"falharam. Abortando set (falha operacional — NÃO vai pra "
+                    f"skip-list)."
                 )
                 self.stats["expansions_mass_pricing_abort"] += 1
-                self._set_abort_reason = f"mass_pricing_failure_{set_pricing_failures}_of_{set_pricing_attempts}"
-                try:
-                    add_to_skip_list(
-                        exp_code,
-                        f"mass_pricing_failure_{set_pricing_failures}_of_{set_pricing_attempts}",
-                    )
-                except Exception as ee:
-                    log.warning(f"  Falha ao gravar skip-list ({exp_code}): {ee}")
+                # `l` já está em set_failed/set_misses; o que falta é i em diante
+                yield from self._conclude_set(
+                    exp_code, exp_name, _pending(i), causes, total_listings,
+                    set_tcg_hits, abort_kind="operational",
+                    abort_reason=f"mass_pricing_failure_{set_pricing_failures}_of_{set_pricing_attempts}")
                 return
 
+            if failed:
+                continue
             if not tcg_market or tcg_market <= 0:
-                # v2.13 (frente eficiência): conta miss consecutivo. Em sets sem
-                # cobertura na pokemontcg.io (ex: 2026 / mega evolução), centenas
-                # de listings seguidos não casam preço — cada um custa uma chamada
-                # à API (com rate limit) que sempre falha. Quando bate o cap,
-                # aborta o set e o joga na skip-list (mesma mecânica do timeout/
-                # mass-pricing-failure). Distingue-se de pricing_failure (erro de
-                # rede/exceção): aqui o request foi OK, só não há match.
+                # v2.13 (frente eficiência): conta miss consecutivo — a fonte
+                # RESPONDEU e não tem a carta (≠ falha). Cap atingido = corte do
+                # set por falta de cobertura (resgate tcgcsv antes de desistir).
                 set_consecutive_misses += 1
-                # v2.23: guarda os misses pra um eventual repasse via fallback
-                # tcgcsv (só se o SET inteiro não tiver NENHUM hit pokemontcg).
                 set_misses.append(l)
+                causes[l.uid] = "miss"
                 if (self.max_consecutive_misses > 0
                         and set_consecutive_misses >= self.max_consecutive_misses):
-                    # v2.23: ANTES de abortar por "sem cobertura", tenta o
-                    # FALLBACK tcgcsv — MAS só se a pokemontcg.io não deu NENHUM
-                    # hit no set inteiro até aqui (set_tcg_hits == 0). Esse é
-                    # exatamente o cenário asc/Ascended Heroes: a pokemontcg.io
-                    # lista as cartas mas sem preço → todo listing vira miss → o
-                    # set estouraria e cairia na skip-list, ficando invisível.
-                    # Sets que a pokemontcg.io JÁ precifica (set_tcg_hits > 0)
-                    # nunca chegam aqui com hits==0 → o default path fica intacto.
-                    if set_tcg_hits == 0 and self._tcgcsv_can_fallback():
-                        # Reprecifica o SET INTEIRO (todos os listings filtrados),
-                        # não só os misses até aqui — o set é precisamente o que a
-                        # pokemontcg.io não cobre (asc), então o tcgcsv assume tudo.
-                        fb_opps = self._price_set_via_tcgcsv(
-                            exp_code, exp_name, list(best_by_uid.values())
-                        )
-                        if fb_opps:
-                            self.stats["expansions_scanned"] += 1
-                            yield from fb_opps
-                            return
-                    elif (set_tcg_hits > 0 and i < total_listings
-                            and self._tcgcsv_can_fallback()):
-                        # Lote 2 (#6, versão restrita): houve hits na pokemontcg.io
-                        # mas o resto do set não tem cobertura (ex.: subset Shiny
-                        # Vault, nomes vintage). Em vez de abortar, o tcgcsv assume
-                        # os misses até aqui + os listings que ainda sobram. Só se
-                        # sobram listings (i < total) e existe groupId; senão cai
-                        # no abort de sempre. Fonte rotulada por linha (price_source).
-                        rest = list(best_by_uid.values())[i:]
-                        fb_opps = self._price_set_via_tcgcsv(
-                            exp_code, exp_name, set_misses + rest
-                        )
-                        if fb_opps:
-                            log.info(
-                                f"  🛟 {exp_code}: corte por {set_consecutive_misses} misses "
-                                f"seguidos em {i}/{total_listings} — tcgcsv precificou "
-                                f"{len(fb_opps)} dos {len(set_misses) + len(rest)} restantes"
-                            )
-                            self._set_note = (
-                                f"tcgcsv_rescue_after_misses_at_{i}_of_{total_listings}"
-                                f"_priced_{len(fb_opps)}"
-                            )
-                            self.stats["expansions_scanned"] += 1
-                            yield from fb_opps
-                            return
                     log.warning(
                         f"  🕳️  SEM COBERTURA em {exp_code} ({exp_name}): "
                         f"{set_consecutive_misses} listings consecutivos sem preço "
-                        f"na fonte (cap={self.max_consecutive_misses}). Abortando set "
-                        f"após {i}/{total_listings}."
+                        f"na fonte (cap={self.max_consecutive_misses}). Cortando set "
+                        f"após {i}/{total_listings}; resgate tcgcsv p/ o restante."
                     )
-                    self.stats["expansions_no_coverage_abort"] += 1
-                    self._set_abort_reason = f"no_coverage_{set_consecutive_misses}_consecutive_misses_at_{i}_of_{total_listings}"
-                    try:
-                        add_to_skip_list(
-                            exp_code,
-                            f"no_coverage_{set_consecutive_misses}_consecutive_misses_at_{i}_of_{total_listings}",
-                        )
-                    except Exception as ee:
-                        log.warning(f"  Falha ao gravar skip-list ({exp_code}): {ee}")
+                    yield from self._conclude_set(
+                        exp_code, exp_name, _pending(i), causes, total_listings,
+                        set_tcg_hits, abort_kind="coverage",
+                        abort_reason=(f"no_coverage_{set_consecutive_misses}_consecutive_"
+                                      f"misses_at_{i}_of_{total_listings}"))
                     return
                 continue
             # Hit: zera o contador de misses consecutivos.
@@ -3644,16 +3750,11 @@ class Scanner:
             if opp is not None:
                 yield opp
 
-        # v2.23: fim do set sem abort. Se a pokemontcg.io não precificou NADA no
-        # set inteiro (set_tcg_hits == 0) mas houve listings (set_misses), tenta
-        # o fallback tcgcsv pra TODOS os misses — cobre o caso asc onde o set tem
-        # poucos cards (não bate o cap de misses consecutivos antes de acabar).
-        if (set_tcg_hits == 0 and set_misses
-                and self._tcgcsv_can_fallback()):
-            fb_opps = self._price_set_via_tcgcsv(exp_code, exp_name, set_misses)
-            yield from fb_opps
-
-        self.stats["expansions_scanned"] += 1
+        # Fim natural do set: o que a fonte principal não precificou (misses do
+        # fim do set e falhas) vai pro resgate tcgcsv — também com hits prévios.
+        yield from self._conclude_set(
+            exp_code, exp_name, set_misses + set_failed, causes, total_listings,
+            set_tcg_hits)
 
     def _build_opportunity(
         self, l: "Listing", tcg_market: float, source_provider: "PricingProvider"
@@ -3742,6 +3843,8 @@ class Scanner:
             set_release_date=set_release,
             variant_low_confidence=variant_low_conf,
             below_threshold=below_threshold,
+            price_fetched_at=(lambda v: v if isinstance(v, str) else "")(
+                getattr(source_provider, "last_price_fetched_at", None)),
         )
 
     def _tcgcsv_can_fallback(self) -> bool:
@@ -3770,47 +3873,8 @@ class Scanner:
     def _price_set_via_tcgcsv(
         self, exp_code: str, exp_name: str, listings: list["Listing"]
     ) -> list["Opportunity"]:
-        """v2.23: reprecifica os listings de um set via FALLBACK tcgcsv.
-
-        Chamado APENAS quando a pokemontcg.io não precificou nada no set
-        (set_tcg_hits == 0). Pré-carrega o set no provider tcgcsv (resolução de
-        groupId unique-match-only) e constrói Opportunities pros que casarem —
-        com a MESMA seleção de variante e o MESMO `_build_opportunity`. Retorna
-        [] se o set não resolve no tcgcsv (sem groupId único / sem dados) → o
-        caller segue com o abort/skip-list honesto (sem preço inventado)."""
-        set_name = listings[0].set_name if listings else ""
-        ptcg_codes = self._ptcg_setcodes_for(exp_code)
-        ok = self.tcgcsv.prefill_set(exp_code, ptcg_codes, set_name)
-        if not ok:
-            return []
-        log.info(
-            f"  🛟 FALLBACK tcgcsv ativo para {exp_code} ({exp_name}): "
-            f"pokemontcg.io sem preço pro set → reprecificando {len(listings)} "
-            f"listings via tcgcsv"
-        )
-        out: list["Opportunity"] = []
-        for l in listings:
-            try:
-                price = self.tcgcsv.market_price_usd(
-                    l.card_name, l.set_code, l.collector_number,
-                    foil=l.foil, rarity=l.rarity,
-                )
-            except Exception as e:  # noqa: BLE001
-                log.debug(f"  tcgcsv pricing falhou {l.card_name}: {e!r}")
-                continue
-            if not price or price <= 0:
-                continue
-            opp = self._build_opportunity(l, price, self.tcgcsv)
-            if opp is not None:
-                out.append(opp)
-        if out:
-            self.stats["tcgcsv_fallback_sets"] += 1
-            self.stats["tcgcsv_fallback_priced"] += len(out)
-            log.info(
-                f"  ✅ tcgcsv resgatou {len(out)} cards em {exp_code} "
-                f"(set ficaria INVISÍVEL sem o fallback)"
-            )
-        return out
+        """Compat: reprecifica via tcgcsv e devolve só as Opportunities."""
+        return self._rescue_via_tcgcsv(exp_code, exp_name, listings)[0]
 
     def scan(self, expansions: list[dict],
              checkpoint: Optional["CheckpointWriter"] = None) -> list[Opportunity]:
@@ -3851,6 +3915,8 @@ class Scanner:
         # o loop inteiro se um set lançar algo inesperado.
         run_start = time.monotonic()
         total_sets = len(expansions)
+        self.set_outcomes: list[dict] = []   # Lote 3: desfecho de cada set
+        self.unpriced_rows: list[dict] = []  # Lote 3: listings sem preço (aba "Sem preço")
         for idx, exp in enumerate(expansions, 1):
             exp_code = exp.get("code", "")
             elapsed_min = (time.monotonic() - run_start) / 60.0
@@ -3872,8 +3938,10 @@ class Scanner:
             stats_pre = dict(self.stats) if checkpoint and checkpoint.enabled else None
             set_start = time.monotonic()
             opps_pre_count = len(opps)
-            self._set_abort_reason = None
-            self._set_note = None
+            # Lote 3: desfecho do set (preenchido por scan_expansion/_conclude_set;
+            # as exceções abaixo viram "operational_failure" — NUNCA skip-list).
+            self._set_status, self._set_reason = "complete", None
+            self._set_unpriced, self._set_note, self._set_total = 0, None, 0
             try:
                 # v2.6: itera o generator e escreve cada Opportunity no checkpoint
                 # ASSIM QUE for yielded. Antes era `opps.extend(scan_expansion(exp))`
@@ -3884,29 +3952,34 @@ class Scanner:
                     if checkpoint:
                         checkpoint.write_opportunity(opp)
             except requests.HTTPError as e:
-                log.error(f"Falha em {exp.get('name')}: {e}")
-                # Não emite set_complete em falha — recovery vai mostrar lacuna
-                continue
+                code = getattr(getattr(e, "response", None), "status_code", "")
+                log.error(f"Falha em {exp.get('name')}: {e} (falha operacional — tentar de novo)")
+                self._set_outcome("operational_failure", f"http_error_{code}")
             except requests.RequestException as e:
-                # Lote 1: falha de rede/CT (ex.: 3 tentativas esgotadas) é
-                # TRANSIENTE — prefixo próprio expira (TTL), ao contrário de
-                # unexpected_error_ (permanente).
+                # Lote 3: rede/5xx/timeout da CT = FALHA OPERACIONAL do run, não
+                # fato do set → nunca vai pra skip-list; aparece no resumo.
                 log.error(
                     f"Falha de rede em {exp.get('name')} ({exp_code}): "
-                    f"{type(e).__name__}: {e}. Continuando próximos sets."
+                    f"{type(e).__name__}: {e}. Falha operacional — tentar de novo."
                 )
-                self._set_abort_reason = f"network_error_{type(e).__name__}"
-                add_to_skip_list(exp_code, f"network_error_{type(e).__name__}")
-                continue
+                self._set_outcome("operational_failure", f"network_error_{type(e).__name__}")
             except Exception as e:
-                # v2.5.1: nunca deixa exceção genérica matar o full scan
+                # v2.5.1: nunca deixa exceção genérica matar o full scan.
+                # Lote 3: também falha operacional (não é ausência de cobertura).
                 log.error(
                     f"Erro inesperado em {exp.get('name')} ({exp_code}): "
-                    f"{type(e).__name__}: {e}. Continuando próximos sets."
+                    f"{type(e).__name__}: {e}. Falha operacional — tentar de novo."
                 )
-                add_to_skip_list(exp_code, f"unexpected_error_{type(e).__name__}")
-                continue
-            # v2.6: set completou sem exception → emite set_complete com DIFFs
+                self._set_outcome("operational_failure", f"unexpected_error_{type(e).__name__}")
+            if self._set_status == "operational_failure":
+                self.stats["expansions_operational_failure"] = self.stats.get("expansions_operational_failure", 0) + 1
+            self.set_outcomes.append({
+                "set": exp_code, "name": exp.get("name", ""),
+                "status": self._set_status, "reason": self._set_reason,
+                "unpriced": self._set_unpriced, "total": self._set_total,
+                "note": self._set_note,
+            })
+            # v2.6: emite set_complete (agora para TODO desfecho) com DIFFs
             if checkpoint and checkpoint.enabled and stats_pre is not None:
                 per_set_stats = {
                     "blueprints": 0,  # sem stat agregado de blueprints; deixar 0
@@ -3919,12 +3992,45 @@ class Scanner:
                     set_name=exp.get("name", ""),
                     per_set_stats=per_set_stats,
                     elapsed_s=time.monotonic() - set_start,
-                    abort_reason=getattr(self, "_set_abort_reason", None),
-                    note=getattr(self, "_set_note", None),
+                    status=self._set_status,
+                    reason=self._set_reason,
+                    unpriced=self._set_unpriced,
+                    note=self._set_note,
                 )
+        # Lote 3: resumo do run — falha operacional NÃO some.
+        op = [o for o in self.set_outcomes if o["status"] == "operational_failure"]
+        nc = [o for o in self.set_outcomes if o["status"] == "no_coverage"]
+        self.stats["sets_operational_failure"] = (
+            "; ".join(f"{o['set']}: {o['reason']}" for o in op) or "(nenhum)")
+        self.stats["sets_no_coverage"] = (
+            "; ".join(f"{o['set']}: {o['unpriced']}/{o['total']} sem preço" for o in nc)
+            or "(nenhum)")
+        self.stats["listings_sem_preco"] = len(self.unpriced_rows)
+        for line in self.run_summary_lines():
+            log.warning(line) if ("tentar de novo" in line) else log.info(line)
         # Ordena por margem bruta desc (maior oportunidade primeiro)
         opps.sort(key=lambda o: o.margin_pct, reverse=True)
         return opps
+
+    def run_summary_lines(self) -> list[str]:
+        """Resumo do run por desfecho (Lote 3). Falha operacional = "não
+        concluído, tentar de novo"; sem cobertura = a fonte respondeu e não tem."""
+        outs = getattr(self, "set_outcomes", [])
+        op = [o for o in outs if o["status"] == "operational_failure"]
+        nc = [o for o in outs if o["status"] == "no_coverage"]
+        ok = [o for o in outs if o["status"] == "complete"]
+        lines = [f"Sets: {len(ok)} completos | {len(nc)} com listings sem cobertura | "
+                 f"{len(op)} com falha operacional"]
+        if op:
+            lines.append("⚠️ NÃO CONCLUÍDOS — tentar de novo (falha operacional): " +
+                         ", ".join(f"{o['set']} ({o['reason']})" for o in op))
+        if nc:
+            lines.append("Sem cobertura (a fonte respondeu e não tem as cartas): " +
+                         ", ".join(f"{o['set']} ({o['unpriced']}/{o['total']})" for o in nc))
+        n = len(getattr(self, "unpriced_rows", []))
+        if n:
+            lines.append(f"{n} listings sem preço — ver aba 'Sem preço' do XLSX")
+        return lines
 
     def validate_per_blueprint(self, opps: list[Opportunity], top_n: int = 30) -> None:
         """Fase 3 / v2.0 — Valida top N candidatos via endpoint per-blueprint.
@@ -4073,7 +4179,8 @@ class Scanner:
 # ══════════════════════════════════════════════════════════════════════
 def export_xlsx(opportunities: list[Opportunity], stats: dict,
                 out_path: Path, usd_brl: float, eur_brl: float,
-                threshold: float, hub_fee_rate: float = 0.0) -> Path:
+                threshold: float, hub_fee_rate: float = 0.0,
+                unpriced: Optional[list] = None) -> Path:
     wb = Workbook()
 
     # Aba 1: Oportunidades
@@ -4112,6 +4219,8 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         # FIM. Honestidade real-vs-fonte: "tcgcsv" = preço de fallback (set que a
         # pokemontcg.io não precificava, ex.: asc); "pokemontcg" = caminho padrão.
         "Fonte Preço",
+        # Lote 3: data/hora em que a referência foi obtida NESTE run (APPEND).
+        "Ref. Data/Hora",
     ]
     ws.append(headers)
 
@@ -4156,6 +4265,7 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
             "Sim" if opp.variant_low_confidence else "",
             # v2.23: fonte do preço (proveniência). Default "pokemontcg".
             opp.price_source or "",
+            opp.price_fetched_at or "",
         ])
 
     # ─── Formatação ───
@@ -4241,6 +4351,20 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
                 end_type="num", end_value=0.30, end_color="86EFAC",
             ),
         )
+
+    # Lote 3: listings SEM preço (sem cobertura / falha operacional / não
+    # alcançados) — nada some em silêncio; aba só existe quando há linhas.
+    if unpriced:
+        ws3 = wb.create_sheet("Sem preço")
+        ws3.append(["Set", "Nome do set", "Carta", "Nº", "CT R$", "Seller",
+                    "Link CardTrader", "Motivo", "Detalhe"])
+        for r in unpriced:
+            ws3.append([r.get("set"), r.get("set_name"), r.get("card"), r.get("number"),
+                        r.get("ct_price_brl"), r.get("seller"), r.get("link"),
+                        r.get("reason"), r.get("detail")])
+        for cell in ws3[1]:
+            cell.fill = header_fill
+            cell.font = header_font
 
     # Aba 2: Stats (auditoria do funnel)
     ws2 = wb.create_sheet("Stats")
@@ -4815,7 +4939,8 @@ def main():
     # pra calcular .checkpoint.jsonl sidecar)
     export_xlsx(opps, scanner.stats, out_path,
                 usd_brl=scanner.usd_brl, eur_brl=scanner.eur_brl,
-                threshold=args.threshold, hub_fee_rate=args.hub_fee)
+                threshold=args.threshold, hub_fee_rate=args.hub_fee,
+                unpriced=getattr(scanner, "unpriced_rows", None))
 
     # Top 5 por margem líquida REAL se validado, senão líquida estimada
     def net_key(o: Opportunity) -> float:
@@ -4849,6 +4974,8 @@ def main():
             print("      → revisar log WARNING acima (schema drift / SSL / endpoint down?)")
     if scanner.stats.get("expansions_mass_pricing_abort", 0) > 0:
         print(f"  💥 Sets abortados (mass pricing fail): {scanner.stats['expansions_mass_pricing_abort']}")
+    for _line in scanner.run_summary_lines():
+        print(f"  {_line}")
     print(f"  Planilha                : {out_path}")
     print("═" * 60)
 
