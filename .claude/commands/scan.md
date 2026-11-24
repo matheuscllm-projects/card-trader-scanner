@@ -22,7 +22,7 @@ anterior já foi entregue). Se algo aqui divergir do `CLAUDE.md`, ele vence.
 
 1. **Python do ambiente**: Windows local `.venv\Scripts\python.exe`; nuvem/CI
    `python` (instale `requirements.txt` em clone limpo).
-2. **Chaves**: `CT_JWT` e `POKEMONTCG_API_KEY` no ambiente ou `.env`. Cuidado
+2. **Chaves**: `CT_JWT` (obrigatória) e `POKEMONTCG_API_KEY` (opcional: só a 2ª fonte de preço) no ambiente ou `.env`. Cuidado
    com BOM/zero-width (`.strip()` NÃO tira BOM — chave suja crasha o header
    latin-1 e o scan sai "verde mas vazio"). Chave ausente/suja → reporte e
    pare. Nunca invente preço.
@@ -104,8 +104,12 @@ python cardtrader_scanner.py \
   = 3000% = zero deals sem erro); **sem `--min-net-margin`** (o scanner não corta por margem; o corte único é do postprocess),
   **sem `--validate-top`** (decisão do operador, Lote 3: a validação per-blueprint
   cobre TODAS as oportunidades; `--validate-top N` só limita, `0` desliga),
-  `--max-consecutive-misses 40` (liga o fallback tcgcsv em set que a
-  pokemontcg.io não precifica, ex. `asc` — sem isso o set sai com 0 preço).
+  `--max-consecutive-misses 40` (valor travado em teste; inofensivo: o tcgcsv, fonte principal, já vem
+  em lote por set e não corta por misses).
+- **Fonte de preço:** NÃO passe `--provider`: o padrão já é `tcgcsv`. A pokemontcg.io só entra como 2ª fonte,
+  quando o tcgcsv acha a carta sem preço. Não use `--provider tcgcsv --ignore-skip-list` como contorno: não é mais
+  necessário (set sem referência sai com motivo, sem skip-list). Resposta incompatível/ambígua do tcgcsv nunca é
+  trocada por preço da outra fonte.
 - Scan custom (`/scan pre ssp`): mesmo comando trocando só a lista de `--sets`.
 - **Nunca dois runs ao mesmo tempo** (mesma pasta de estado — o scanner
   recusa). Grupos escolhidos rodam **em sequência**, cada um em background,
@@ -124,13 +128,22 @@ python cardtrader_scanner.py \
 
 ## 4. Postprocess + entrega (por grupo, formato OBRIGATÓRIO)
 
-Assim que **cada grupo** terminar (não espere os outros):
+Assim que **cada grupo** terminar (não espere os outros). Para a liquidez (que libera COMPRA) adicione
+`--pc-refs N` (consultas únicas ao PriceCharting) e, se ele bloquear (403), `--pc-firecrawl N` (pago, 1 crédito por
+página, **teto 100 por scan**; padrão 0 = não gasta):
 
 ```bash
 python cardtrader_postprocess.py \
   --input outputs/scan_g<N>_<stamp>.xlsx \
   --output outputs/relatorio_g<N>_<stamp>.xlsx
 ```
+
+Como ler a decisão (regras do código, nada além disso): **Inferido** (raridade da CardTrader não informa o
+acabamento; margem estimada) = sempre REVISAR, nunca COMPRA. Referência **ambígua** = sem referência e sem preço.
+Referência **mais velha que 7 dias** (`--max-ref-age-days`), de idade desconhecida ou futura = REVISAR. Preço
+PriceCharting compatível que **diverge** mais que `--max-ref-divergence` (0,30), ou margem pela MENOR referência
+abaixo de 30% = REVISAR. COMPRA exige **liquidez** (≥5 vendas/90d e ≥1/30d). Linha que ficou sem consulta por
+orçamento Firecrawl esgotado aparece como `NAO_CONSULTADO_ORCAMENTO`; a coluna **PC Motivo** explica por quê.
 
 (**sem `--top-md`**: a entrega mostra TODAS as linhas de COMPRA e REVISAR. Se alguém limitar com
 `--top-md N`, o cabeçalho diz "mostrando N de M" e o rodapé diz quantas ficaram de fora e que

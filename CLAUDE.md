@@ -49,7 +49,7 @@ Erros recorrentes (3 famílias — detalhe no manual):
 2. **Git:** branch ou `main` local defasado por squash-merge PARECE pendência. O teste real de "já mergeado" é `git diff --stat origin/main <branch>` estar vazio (não `git merge-base`).
 3. **Honestidade de preço:** inflação de referência, fallback tratado como real, NM frouxo → sempre validar versão/condição e rotular fallback.
 
-**Este scanner:** referência de preço = pokemontcg.io com validação per-blueprint (casa NM + variante exata) → **fallback `tcgcsv.com`** (v2.23; só em set que a pokemontcg.io não precifica, ex. `asc`; correspondência EXATA de edição e acabamento, nunca o mais barato); chaves = `CT_JWT`, `POKEMONTCG_API_KEY`.
+**Este scanner:** fonte principal do preço de referência = **`tcgcsv.com`** (padrão do `--provider` desde a B1j, decisão do dono 2026-11-24), com validação per-blueprint (casa NM + variante exata). A **pokemontcg.io é só a 2ª fonte**: entra apenas quando o tcgcsv tem a carta mas SEM preço na chave certa; resposta incompatível ou ambígua do tcgcsv **nunca** é trocada por preço da outra fonte (correspondência EXATA de edição e acabamento, nunca o mais barato). Chaves = `CT_JWT` (obrigatória), `POKEMONTCG_API_KEY` (opcional, só p/ a 2ª fonte).
 
 ---
 
@@ -154,7 +154,7 @@ Exemplo: compra 75, referência 100 → margem 25% (**não** passa em 30%), ROI 
 > venda, só que agora vem de um único módulo.
 
 > **Detalhe técnico (pode pular):** o primeiro rastreio usa um preço "cru"
-> (*per-expansion*, agregado por coleção); a conferência (`--validate-top`)
+> (*per-expansion*, agregado por coleção); a conferência (`--validate-top`, que existe e vale)
 > refaz com o preço **real de checkout** (*per-blueprint*, por carta exata).
 > **Sempre conferir** — sem isso, no passado **~76% dos "achados" eram falsos**.
 > Desde o Lote 3 (2026-11) o padrão de `--validate-top` é **validar TODAS** as
@@ -192,7 +192,7 @@ site gera pra você). Ele fica assim:
 
 ```
 CT_JWT=<seu token do CardTrader: no site, Settings → API Access → Create New Token>
-POKEMONTCG_API_KEY=<opcional, grátis em pokemontcg.io/dev>
+POKEMONTCG_API_KEY=<opcional (2ª fonte de preço), grátis em pokemontcg.io/dev>
 ```
 
 > ⚠️ O `.env` **nunca** vai pra nuvem (tem sua senha dentro). O programa já está
@@ -303,6 +303,12 @@ Opções úteis:
   de maior lucro primeiro; é o que libera COMPRA)) — `--help` de cada script lista
   tudo.
 
+> ℹ️ **Histórico (vale só com `--provider pokemontcg`):** desde a B1j o padrão é o
+> tcgcsv como fonte principal; nele o set inteiro vem em lote e **não há corte por misses**,
+> então `--ignore-skip-list` e `--provider tcgcsv` deixaram de ser contorno. O gotcha abaixo
+> descreve o caminho antigo (pokemontcg.io primeiro). Os comandos do skill ainda passam
+> `--max-consecutive-misses 40` (travado em teste; inofensivo com o tcgcsv).
+>
 > ⚠️ **Gotcha do fallback tcgcsv (registrado 2026-07-06; skill alinhada em
 > 2026-07-20):** o fallback `tcgcsv.com` (v2.23) tem **dois gatilhos**: o cap
 > de misses consecutivos (`--max-consecutive-misses > 0`) e um **resgate de
@@ -322,7 +328,7 @@ Opções úteis:
 > certo(s) em `CT_SET_TO_TCGCSV_GROUP_IDS`. Antes, só ~21 sets tinham esse
 > atalho e o resto era casado pelo **nome**, que falhava em nomes parecidos —
 > por isso `svi`, `kss`, `gen` e `evo` saíam "sem referência de preço" no
-> `--provider tcgcsv`. Único set sem referência de propósito: `c25`
+> tcgcsv (agora o padrão). Único set sem referência de propósito: `c25`
 > (Celebrations — a numeração da Classic Collection colide com a do set
 > principal). **Set novo no universo?** O teste `tests/test_tcgcsv_group_map.py`
 > quebra até você mapear o groupId (conferido no `/groups` do tcgcsv) ou
@@ -538,8 +544,8 @@ muitas cartas) precisam de bem mais que 8 minutos. Elas estouravam o tempo
 - `cg` / `g1` / `g2` / `tr` / `hp` / `aq` — **18 min** (adicionados no Lote 1 de resiliência,
   2026-11: estouravam os 8 min no run de 2026-06-27);
 - `cri` (Chaos Rising, era Mega Evolution / me4 — adicionado no #47) —
-  **20 min**: a pokemontcg.io não precifica o set, então ele cai no fallback
-  tcgcsv per-listing, que é lento.
+  **20 min**: a pokemontcg.io não precifica o set, então (no caminho antigo
+  `--provider pokemontcg`) ele caía no fallback tcgcsv per-listing, que é lento.
 
 Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
 (em minutos) ainda vale e vence o ajuste interno. Notas:
@@ -586,7 +592,7 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
   default antigo `--validate-top 30`); agora o canônico valida TODAS, então a
   duração por grupo precisa ser **remedida** num scan real (ainda não feito) —
   trate os "≤~2h30" como estimativa, não garantia.
-- **Resgate tcgcsv:** tudo que a pokemontcg.io não precificou (misses do fim do
+- **Resgate tcgcsv** (caminho `--provider pokemontcg`): tudo que a pokemontcg.io não precificou (misses do fim do
   set, falhas, listings não alcançados) é oferecido ao tcgcsv (referência buscada
   **neste run**, correspondência exata de edição e acabamento). Cada linha leva `Fonte Preço` e
   `Ref. Data/Hora`. Resgate parcial **nunca** é "completo".
@@ -628,7 +634,7 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
 
 ### B1b — fallback tcgcsv, entrega completa, cobertura
 
-- **Fallback tcgcsv para ref incompatível:** se a pokemontcg.io acha a carta mas sem a variante
+- **Fallback tcgcsv para ref incompatível** (só no caminho `--provider pokemontcg`; no padrão o tcgcsv é a fonte principal e a resposta incompatível dele NÃO vai à pokemontcg.io): se a pokemontcg.io acha a carta mas sem a variante
   exata, a oferta vai ao tcgcsv (mesma regra exata; grupo Shadowless nunca). Se o tcgcsv
   também não resolve, UMA linha em "Sem Ref Compatível" com os dois motivos (um por fonte).
   `Fonte Preço` diz quem precificou.
@@ -650,7 +656,7 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
 
 ### B1e/B1f — disjuntor da fonte, idade da referência, conflito de rótulo
 
-- **Disjuntor da fonte principal (pokemontcg.io → tcgcsv em lote):** o scanner mede a saúde da fonte
+- **Disjuntor da fonte principal (caminho `--provider pokemontcg`: pokemontcg.io → tcgcsv em lote; com o padrão tcgcsv a fonte já é em lote):** o scanner mede a saúde da fonte
   POR OFERTA (janela das últimas N: falha de infra — 5xx, timeout, 4xx≠429 — ou oferta que só respondeu
   depois de retry 5xx — e latência). Passou do limite = fonte degradada: o resto do set e os sets
   seguintes vão direto ao tcgcsv (mesma regra exata); uma sonda barata (consulta de carta real) decide
@@ -672,9 +678,10 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
   própria CardTrader; `Inferido` (coluna "Acabamento Inferido (motivo)") quando foi deduzido da referência
   (carta só existe em holo; set holo-only `det`; rótulo CT desconhecido; **promo vazia/"Promo" com UMA única
   impressão normal**). Inferido tem margem exibida, nunca COMPRA, e é contado por set no resumo. Ponto único
-  da decisão do dono: `ct_variants.INCONCLUSIVE_SINGLE_PRINT_POLICY` (`{"normal": "inferir", "holo":
-  "sem_referencia"}`; promo com única impressão holo segue sem referência até o dono trocar o valor) e
-  `NO_INFERENCE_CT_RARITIES`. Mais de uma impressão não-reverse = sem referência compatível.
+  da decisão do dono: `ct_variants.INCONCLUSIVE_SINGLE_PRINT_POLICY` (hoje `{"normal": "inferir", "holo": "inferir"}`,
+  decisão do dono 2026-11-24: raridade vazia/"Promo"/"Fixed" com UMA única impressão, normal ou holo, vira
+  Inferido; o valor `"sem_referencia"` desliga a inferência daquele acabamento) e `NO_INFERENCE_CT_RARITIES`.
+  Mais de uma impressão não-reverse = sem referência compatível.
 - **Referência ambígua (B1i/B1j):** dois produtos DIFERENTES da referência na mesma chave (ex.: wiz Mew "08/53" × "Mew - 8 (Glossy Finish)"),
   duas linhas do mesmo subtipo no mesmo produto com preços diferentes, ou vários resultados da pokemontcg.io para a mesma carta = AMBÍGUA:
   nunca "um dos dois" (nada de last-wins, `results[0]`, ordem ou preço). Só casa se dado declarado da oferta desempata (número completo com
@@ -685,6 +692,39 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
   consultadas com a causa; o fallback vale nos dois sentidos (`--provider tcgcsv` consulta a
   pokemontcg.io quando saudável). Set com menos da metade precificada (todos os motivos) é destacado no
   resumo e no rodapé.
+
+### B1g–B1k — como o código decide hoje (resumo em linguagem simples)
+
+- **De onde vem o preço:** o `--provider` padrão é `tcgcsv` (o dump diário do TCGplayer, em lote por set).
+  A pokemontcg.io só é consultada quando o tcgcsv ACHOU a carta mas ela está SEM preço na chave certa
+  (`CARTA_SEM_PRECO`). Se o tcgcsv respondeu "variante incompatível" ou "referência ambígua", essa resposta
+  vale: o scanner **nunca** a troca por um preço da outra fonte para "salvar" a linha.
+- **Inferido:** quando a raridade da CardTrader não diz o acabamento (vazia, "Promo", "Fixed"/BREAK, rótulo
+  desconhecido) e a referência tem UMA só impressão não-reverse (normal ou holo — política
+  `INCONCLUSIVE_SINGLE_PRINT_POLICY`, hoje `inferir` nos dois), o acabamento é deduzido da referência. A margem
+  aparece (estimada), a linha leva `Ref Compatível = Inferido` e a coluna "Acabamento Inferido (motivo)", e a
+  decisão é **sempre REVISAR, nunca COMPRA**. Com mais de uma impressão não-reverse não se adivinha: sem referência.
+- **Ambiguidade = sem referência, sem preço:** vários produtos com a mesma chave (número), o mesmo subtipo duas
+  vezes no mesmo produto com preços diferentes, ou mais de uma impressão possível. Só desempata dado
+  declarado da oferta (número completo com denominador, ou nome exato do produto). Senão a linha vai para
+  "Sem Ref Compatível" com o motivo — nunca "um dos dois", nunca ordem de chegada ou preço.
+- **Idade da referência:** `--max-ref-age-days` (padrão 7, no scanner e no postprocess). Idade desconhecida
+  (fonte sem data do dado, "buscado em", data inválida ou **futura**) ou acima do limite impede COMPRA; a
+  linha vai a REVISAR e a margem continua visível. No scanner, referência velha da fonte principal é trocada
+  pela do tcgcsv só se houver uma compatível mais nova (coluna `Troca de Referência`).
+- **Divergência entre referências (postprocess):** `--max-ref-divergence` (padrão 0,30, fração da MAIOR das
+  duas). Com preço PriceCharting compatível (mesma edição/acabamento, ungraded) que diverge acima disso, a linha
+  vai a REVISAR ("referências divergem"). Se o PC é MENOR que a TCG, a margem recalculada pela menor referência
+  também precisa passar o corte de 30%; senão REVISAR. Sem PC compatível vale só a regra de liquidez.
+- **Liquidez e PriceCharting:** COMPRA exige ≥5 vendas em 90 dias (`--min-sales-90d`) e ≥1 em 30
+  (`--min-sales-30d`) na página da MESMA edição; sem dado → REVISAR. `--pc-refs N` limita consultas únicas;
+  `--pc-firecrawl N` paga Firecrawl só quando o PC bloqueia, com **teto de 100 créditos por scan** (acima disso
+  o comando recusa). Linha que sobrou sem consulta porque o orçamento acabou fica com o status
+  `NAO_CONSULTADO_ORCAMENTO` (não é falha da fonte). A coluna **"PC Motivo"** diz, linha a linha, por que o PC
+  não foi consultado ou não serviu (edição não informada, bloqueio, orçamento…). O rodapé conta consultas
+  únicas, duplicadas evitadas, por status, e os créditos usados.
+- **Contadores:** o resumo e o rodapé contam por fonte (derivados das linhas, não de variáveis soltas),
+  incluindo quantas linhas saíram Inferido por set.
 
 ## Scanner paralelo: Dragon Ball Super (`dbs_scanner.py`)
 
@@ -825,7 +865,7 @@ python -m pytest              # Windows: .venv\Scripts\python.exe -m pytest
 ## Arquitetura (o que é cada arquivo)
 
 ```
-cardtrader_scanner.py       o scanner: varre o CardTrader, precifica (pokemontcg.io → fallback tcgcsv) e grava o XLSX cru
+cardtrader_scanner.py       o scanner: varre o CardTrader, precifica (tcgcsv principal; pokemontcg.io só 2ª fonte) e grava o XLSX cru
 cardtrader_postprocess.py   o relatório: classifica COMPRA/REVISAR/NÃO e gera a tabela de ENTREGA (build_delivery_markdown)
 dbs_scanner.py              scanner PARALELO de DRAGON BALL (Fusion World/Masters): CT ao vivo vs TCGplayer — ver seção própria
 op_scanner.py               scanner PARALELO de ONE PIECE (game 15 / tcgcsv cat 68): mesmo molde do dbs — ver seção própria

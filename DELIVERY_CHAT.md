@@ -76,3 +76,15 @@ O integrado deve chamar as fontes nesta execução, sem carregar arquivos antigo
 - O scanner não remove linha por margem depois de validar; `--min-net-margin` só marca. O corte único é do postprocess.
 - Falha de infraestrutura no fallback tcgcsv = `Sem preço` (falha operacional) e set `operational_failure`
   ("tentar de novo"), nunca `Sem Ref Compatível` definitivo.
+
+## B1g–B1k — como ler a decisão (resumo)
+
+- Fonte principal do preço = tcgcsv (padrão do `--provider`); pokemontcg.io só quando o tcgcsv tem a carta
+  sem preço. `Fonte ref.` diz quem precificou; resposta incompatível/ambígua nunca é trocada por outra fonte.
+- `Ref Compatível = Inferido` (raridade CT não informa o acabamento): margem estimada, sempre REVISAR.
+- Referência ambígua = linha sem referência e sem preço (bloco `Sem Ref Compatível`, com o motivo).
+- Referência com idade desconhecida/futura ou acima de `--max-ref-age-days` (7) = REVISAR.
+- PriceCharting compatível divergindo mais que `--max-ref-divergence` (0,30), ou margem pela MENOR referência
+  abaixo do corte = REVISAR.
+- Liquidez: ≥5 vendas/90d e ≥1/30d. Firecrawl: teto 100 créditos por scan; sem consulta por orçamento =
+  `NAO_CONSULTADO_ORCAMENTO`; a coluna `PC Motivo` traz a causa linha a linha.
