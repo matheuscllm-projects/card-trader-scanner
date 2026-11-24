@@ -2923,8 +2923,23 @@ def load_skip_list() -> dict:
         raise
 
 
-def add_to_skip_list(exp_code: str, reason: str) -> None:
-    """Adiciona um exp_code à skip-list com motivo + timestamp. Idempotente.
+def effective_skip_set(skip_data: dict, provider: str, now: Optional[datetime] = None) -> set:
+    """B1l: sets que ESTE run pula. Só vale a entrada gravada pelo MESMO provider (campo `provider`);
+    entrada sem provider (legada/str) ou de outro provider não pula: o set é reavaliado, porque no_coverage
+    de um run pokemontcg não diz nada sobre o tcgcsv (o default atual). TTL das transientes continua valendo."""
+    reasons = skip_data.get("reasons") or {}
+    out = set()
+    for code in skip_data.get("skipped", []):
+        entry = reasons.get(code)
+        if not (isinstance(entry, dict) and entry.get("provider") == provider):
+            continue
+        if not _skip_entry_is_expired(entry, now):
+            out.add(code)
+    return out
+
+
+def add_to_skip_list(exp_code: str, reason: str, provider: Optional[str] = None) -> None:
+    """Adiciona um exp_code à skip-list com motivo + timestamp + provider. Idempotente.
     Thread+process-safe (exclusive lock + atomic write)."""
     lock_path = _skip_list_lock_path()
     try:
@@ -2956,6 +2971,7 @@ def add_to_skip_list(exp_code: str, reason: str) -> None:
             reasons[exp_code] = {
                 "reason": reason,
                 "added_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "provider": provider,   # B1l: skip-list só vale para o provider que a gravou
             }
             payload = {
                 "skipped": sorted(skipped),
@@ -3960,7 +3976,7 @@ class Scanner:
         if abort_kind == "coverage" and status == "no_coverage":
             self.stats["expansions_no_coverage_abort"] += 1
             try:
-                add_to_skip_list(exp_code, abort_reason or "no_coverage")
+                add_to_skip_list(exp_code, abort_reason or "no_coverage", provider=self.pricing.name)
             except Exception as ee:
                 log.warning(f"  Falha ao gravar skip-list ({exp_code}): {ee}")
 
@@ -4636,17 +4652,20 @@ class Scanner:
         # refresca added_at). Entries permanentes (unexpected_error_*) e legadas
         # (str pura, sem timestamp) seguem pulando.
         reasons_map = skip_data.get("reasons") or {}
-        skip_set = set(skip_data.get("skipped", []))
-        expired = {
-            code for code in skip_set
-            if _skip_entry_is_expired(reasons_map.get(code))
-        }
+        all_skipped = set(skip_data.get("skipped", []))
+        skip_set = effective_skip_set(skip_data, self.pricing.name)
+        expired = {c for c in all_skipped - skip_set if _skip_entry_is_expired(reasons_map.get(c))}
         if expired:
             log.info(
                 f"Skip-list TTL ({_SKIP_LIST_TTL_DAYS}d): re-tentando {len(expired)} "
                 f"set(s) transiente(s) expirado(s): {', '.join(sorted(expired))}"
             )
-            skip_set -= expired
+        foreign = all_skipped - skip_set - expired
+        if foreign:
+            log.info(
+                f"Skip-list: {len(foreign)} set(s) gravado(s) sem provider ou por outro provider que não "
+                f"'{self.pricing.name}' serão reavaliados: {', '.join(sorted(foreign))}"
+            )
         if skip_set:
             log.info(
                 f"Skip-list ativa ({SKIP_LIST_FILE.name}): {len(skip_set)} sets serão pulados "
@@ -5525,8 +5544,9 @@ def parse_args():
                          "não resolver no tcgcsv sai sem referência de preço "
                          "(sem skip-list), nunca com preço inventado."))
     p.add_argument("--no-tcgcsv-fallback", action="store_true",
-                   help=("v2.23: DESLIGA o fallback tcgcsv.com. Por padrão "
-                         "(omitido), quando a pokemontcg.io não precifica um SET "
+                   help=("v2.23: DESLIGA o fallback tcgcsv.com. SÓ vale com --provider pokemontcg: "
+                         "com o default (--provider tcgcsv) o tcgcsv já é a fonte primária e esta flag "
+                         "é inócua. Com pokemontcg, por padrão (omitido), quando a pokemontcg.io não precifica um SET "
                          "inteiro (ex.: asc/Ascended Heroes — set fica INVISÍVEL "
                          "sem isso), o scanner consulta o tcgcsv pra preencher SÓ "
                          "esse buraco (com a MESMA seleção de variante e validação "

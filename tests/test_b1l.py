@@ -100,3 +100,39 @@ def test_matching_denominator_still_resolves_and_exact_name_without_denominator_
     assert cv.resolve_candidates(_MEW, "Mew - 8", "8")[0] is None                  # prefixo/substring nunca
     dup = [{"name": "Mew", "number": "8"}, {"name": "mew", "number": "08"}]
     assert cv.resolve_candidates(dup, "Mew", "8")[0] is None                       # 2 nomes identicos = ambiguo
+
+
+# ───────── (6) skip-list x provider: entrada sem provider / de outro provider NAO pula o set ─────────
+def test_skip_list_entry_records_the_provider_that_wrote_it(tmp_path, monkeypatch):
+    import cardtrader_scanner as sc
+    monkeypatch.setattr(sc, "SKIP_LIST_FILE", tmp_path / "scanner_skip_list.json")
+    sc.add_to_skip_list("n1", "no_coverage_40_consecutive_misses", provider="pokemontcg")
+    entry = sc.load_skip_list()["reasons"]["n1"]
+    assert entry["provider"] == "pokemontcg" and entry["reason"].startswith("no_coverage")
+
+
+def test_skip_set_only_keeps_entries_written_by_the_current_provider():
+    import cardtrader_scanner as sc
+    data = {"skipped": ["a", "b", "c", "d"], "reasons": {
+        "a": {"reason": "no_coverage_x", "added_at": "2099-01-01T00:00:00Z", "provider": "tcgcsv"},
+        "b": {"reason": "no_coverage_x", "added_at": "2099-01-01T00:00:00Z", "provider": "pokemontcg"},
+        "c": {"reason": "no_coverage_x", "added_at": "2099-01-01T00:00:00Z"},      # dict sem provider
+        "d": "unexpected_error_legada"}}                                           # str legada
+    assert sc.effective_skip_set(data, "tcgcsv") == {"a"}
+    assert sc.effective_skip_set(data, "pokemontcg") == {"b"}
+
+
+def _parse_scanner(monkeypatch, argv):
+    import cardtrader_scanner as sc
+    monkeypatch.setattr(sys, "argv", ["cardtrader_scanner.py", *argv])
+    return sc.parse_args()
+
+
+def test_default_provider_is_tcgcsv_and_fallback_flag_help_tells_the_truth(monkeypatch, capsys):
+    assert _parse_scanner(monkeypatch, []).provider == "tcgcsv"
+    assert _parse_scanner(monkeypatch, ["--provider", "pokemontcg", "--no-tcgcsv-fallback"]).no_tcgcsv_fallback
+    with pytest.raises(SystemExit):
+        _parse_scanner(monkeypatch, ["--help"])
+    out = " ".join(capsys.readouterr().out.split())
+    help_txt = out[out.rindex("--no-tcgcsv-fallback"):][:900]
+    assert "só vale com --provider pokemontcg" in help_txt.lower() and "inócuo" in help_txt
