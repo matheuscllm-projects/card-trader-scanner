@@ -1649,10 +1649,15 @@ class PokemonTcgIoProvider(PricingProvider):
     def probe(self, timeout: float = 5.0) -> bool:
         """B1e: sonda BARATA de saúde — 1 chamada, sem retry, sem backoff. True = HTTP 200."""
         try:
+            # consulta REPRESENTATIVA (uma carta real com preço TCGplayer), não um pageSize=1 trivial
             r = self.session.get(f"{POKEMONTCG_BASE}/cards",
-                                 params={"pageSize": 1, "select": "id"}, timeout=timeout)
-            return r.status_code == 200
-        except requests.RequestException:
+                                 params={"q": 'set.id:base1 name:"Charizard"', "pageSize": 1,
+                                         "select": "id,tcgplayer"}, timeout=timeout)
+            if r.status_code != 200:
+                return False
+            data = (r.json() or {}).get("data") or []
+            return bool(data and (data[0].get("tcgplayer") or {}).get("prices"))
+        except (requests.RequestException, ValueError, AttributeError):
             return False
 
     def _rate_limit(self):
@@ -3224,10 +3229,11 @@ class SourceBreaker:
         self.open_fail, self.open_n = 0, 0
         self._last_probe: Optional[float] = None
         self.events: list[dict] = []          # aberturas/fechamentos do run (para o resumo)
+        self.total_fail, self.total_n = 0, 0  # todo o run (para "saudável" honesto)
 
     @property
     def fail_count(self) -> int:
-        return self.open_fail if self.is_open else sum(1 for ok, _ in self._w if not ok)
+        return self.open_fail if self.is_open else sum(1 for ok, _, _t in self._w if not ok)
 
     @property
     def sample_count(self) -> int:
@@ -3237,19 +3243,25 @@ class SourceBreaker:
         """Registra uma oferta; devolve True se ESTA chamada abriu o disjuntor."""
         if self.is_open:
             return False
-        self._w.append((bool(ok), float(latency_s)))
+        self._w.append((bool(ok), float(latency_s), datetime.now()))
         del self._w[:-self.window]
+        self.total_n += 1
+        self.total_fail += 0 if ok else 1
         n = len(self._w)
-        fails = sum(1 for o, _ in self._w if not o)
+        fails = sum(1 for o, _, _t in self._w if not o)
         # lentidão (retries + Retry-After custam dezenas de s por oferta): bastam 2 amostras;
         # taxa de falha pede o mínimo da janela
-        slow = n >= self.MIN_SLOW_SAMPLES and sum(lat for _, lat in self._w) / n > self.slow_s
+        slow = n >= self.MIN_SLOW_SAMPLES and sum(lat for _, lat, _t in self._w) / n > self.slow_s
         if slow or (n >= self.min_samples and fails / n >= self.fail_rate):
             self.is_open, self.opened_at = True, datetime.now()
             self.open_fail, self.open_n = fails, n
             self._last_probe = self._clock()
-            self.events.append({"event": "open", "at": self.opened_at, "fails": fails, "n": n,
-                                "why": "latência" if slow and fails / n < self.fail_rate else "falhas"})
+            # início da degradação = 1ª amostra ruim (falha ou lenta) da janela
+            bad = [t for ok, lat, t in self._w if (not ok) or lat > self.slow_s]
+            self.events.append({"event": "open", "at": bad[0] if bad else self.opened_at,
+                                "opened_at": self.opened_at, "fails": fails, "n": n,
+                                "why": "latência" if slow and fails / n < self.fail_rate else "falhas",
+                                "slow_s": self.slow_s})
             return True
         return False
 
@@ -3722,7 +3734,11 @@ class Scanner:
                             ",".join(pa(self.tcgcsv, "last_available_keys", list, [])),
                             pa(self.tcgcsv, "last_tcg_url", str, "") or "")
                     else:
-                        self._record_noref(exp_code, l, self.tcgcsv)
+                        base = pa_reason = self._pa(self.tcgcsv, "last_ref_reason", str, "")
+                        nc = (self.__dict__.get("_not_consulted") or {}).get(l.uid)
+                        if nc:
+                            base = f"tcgcsv: {pa_reason} | {nc}"
+                        self._record_noref(exp_code, l, self.tcgcsv, reason=base)
                 continue
             self.__dict__.setdefault("_noref_first", {}).pop(l.uid, None)
             handled.add(l.uid)
@@ -3760,6 +3776,10 @@ class Scanner:
         # B1e: a fonte principal falhou neste set? (só para a nota; o DESFECHO vem da cobertura final)
         primary_failed = abort_kind in ("operational", "breaker") or any(
             causes.get(l.uid) == "failure" for l in pending)
+        # B1f: ofertas que a fonte principal NÃO chegou a consultar (e por quê) — vai no motivo
+        nc_text = self._not_consulted_text(abort_kind, abort_reason)
+        self._not_consulted = ({l.uid: nc_text for l in pending
+                                if causes.get(l.uid, "not_reached") == "not_reached"} if nc_text else {})
         if pending and self._tcgcsv_can_fallback():
             opps, handled, rescue_status = self._rescue_via_tcgcsv(exp_code, exp_name, pending)
             yield from opps
@@ -3795,6 +3815,11 @@ class Scanner:
                     self._finalize_noref_pair(l, why)
         noref_uids = self.__dict__.setdefault("_noref_uids", set())
         left = [l for l in pending if l.uid not in handled and l.uid not in noref_uids]
+        for l in left:      # B1f: "sem referência na fonte" diz quais fontes responderam e quais não foram consultadas
+            nc = (self.__dict__.get("_not_consulted") or {}).get(l.uid)
+            if nc and l.uid not in infra_detail and causes.get(l.uid) == "miss":
+                why_t = "sem dados do set" if rescue_status == "no_group" else "carta não encontrada"
+                infra_detail[l.uid] = f"tcgcsv: {why_t} | {nc}"
         rescued = len(handled)
         prim = self._primary_name()
         self._set_by_source = ({"tcgcsv": hits + rescued} if prim == "tcgcsv"
@@ -4122,6 +4147,14 @@ class Scanner:
                     self.__dict__.setdefault("_noref_first", {})[l.uid] = self._noref_row(
                         exp_code, l, self.pricing)
                     set_noref_first.append(l)
+                elif isinstance(self.pricing, TcgCsvFallbackProvider) and self.__dict__.get("ptcg_alt") is not None:
+                    got = self._ask_ptcg_alt(exp_code, l)
+                    if got:
+                        opp = self._build_opportunity(l, got, self.ptcg_alt)
+                        if opp is not None:
+                            yield opp
+                        else:
+                            self._set_accounted.add(l.uid)
                 else:
                     self._record_noref(exp_code, l, self.pricing)
             elif not tcg_market or tcg_market <= 0:
@@ -4322,6 +4355,73 @@ class Scanner:
         if key is not None and not divided:
             return ct_variants.ED_NONE
         return ct_variants.ED_UNL
+
+    def _not_consulted_text(self, abort_kind: Optional[str], abort_reason: Optional[str]) -> Optional[str]:
+        """Frase 'fonte X não consultada: causa' para as ofertas que a fonte principal não alcançou."""
+        if abort_kind == "breaker":
+            brk = self.__dict__.get("breaker")
+            at = getattr(brk, "opened_at", None)
+            since = f" desde {at:%H:%M}" if at else ""
+            return f"{self._primary_label()} não consultada: fonte degradada{since}"
+        if abort_kind == "operational":
+            return (f"{self._primary_label()} não consultada: o set foi interrompido antes desta oferta "
+                    f"({abort_reason})")
+        return None
+
+    def _primary_label(self) -> str:
+        return "pokemontcg.io" if self._primary_name() == "pokemontcg" else self._primary_name()
+
+    def _ask_ptcg_alt(self, exp_code: str, l: "Listing"):
+        """B1f: fallback nos DOIS sentidos. Primário tcgcsv sem variante compatível -> consulta a
+        pokemontcg.io (se habilitada e saudável). Devolve o preço (USD) ou None; quando None, a linha
+        "Sem Ref Compatível" JÁ foi registrada, com as fontes consultadas e as não consultadas."""
+        first = self._noref_row(exp_code, l, self.pricing)
+        alt = self.__dict__.get("ptcg_alt")
+        t_first = f"tcgcsv: {first['motivo']}"
+
+        def commit(extra: str, source: str) -> None:
+            first["motivo"] = f"{t_first} | {extra}"
+            first["source"] = source
+            self._commit_noref(l, first)
+
+        if alt is None:
+            commit("pokemontcg.io não consultada: não habilitada neste run", "tcgcsv")
+            return None
+        brk = self.__dict__.setdefault("ptcg_alt_breaker", SourceBreaker())
+        if brk.is_open:
+            if brk.probe_due():
+                brk.mark_probe()
+                probe = getattr(alt, "probe", None)
+                try:
+                    ok = bool(probe()) if callable(probe) else True
+                except Exception:  # noqa: BLE001
+                    ok = False
+                if ok:
+                    brk.close()
+            if brk.is_open:
+                at = f" desde {brk.opened_at:%H:%M}" if brk.opened_at else ""
+                commit(f"pokemontcg.io não consultada: fonte degradada{at}", "tcgcsv")
+                return None
+        t0 = time.monotonic()
+        r0 = getattr(alt, "retry_5xx", 0)
+        r0 = r0 if isinstance(r0, int) else 0
+        infra = False
+        try:
+            px = alt.market_price_usd(l.card_name, l.set_code, l.collector_number, foil=l.foil,
+                                      rarity=l.rarity, first_edition=l.first_edition)
+        except (requests.ConnectionError, requests.Timeout) as e:
+            infra, px = True, None
+            log.debug(f"  pokemontcg.io (2ª fonte) falhou {l.card_name}: {e!r}")
+        r1 = getattr(alt, "retry_5xx", 0)
+        brk.record(not (infra or (isinstance(r1, int) and r1 > r0)), time.monotonic() - t0)
+        if infra:
+            commit("pokemontcg.io consultada e INDISPONÍVEL (falha de rede/5xx)", "tcgcsv")
+            return None
+        if px and px > 0:
+            return px
+        reason = self._pa(alt, "last_ref_reason", str, "") or "carta/variante não encontrada"
+        commit(f"pokemontcg: {reason}", "tcgcsv+pokemontcg")
+        return None
 
     def _ref_age_days(self, provider) -> Optional[int]:
         d = _iso_date(getattr(provider, "last_ref_data_at", None))
@@ -4581,12 +4681,19 @@ class Scanner:
             return None
         opens = [e for e in brk.events if e["event"] == "open"]
         if not opens:
+            if getattr(brk, "total_fail", 0):
+                return (f"pokemontcg.io saudável neste run, com {brk.total_fail} falha(s) em "
+                        f"{brk.total_n} ofertas (abaixo do limite)")
             return "pokemontcg.io saudável neste run (disjuntor não abriu)"
         parts = []
         for k, e in enumerate(brk.events):
             if e["event"] == "open":
-                parts.append(f"pokemontcg.io degradada às {e['at']:%H:%M} após {e['fails']} falhas "
-                             f"em {e['n']}")
+                if e.get("why") == "latência":
+                    parts.append(f"pokemontcg.io degradada às {e['at']:%H:%M} por latência (média acima de "
+                                 f"{e.get('slow_s', 0):g} s em {e['n']} ofertas)")
+                else:
+                    parts.append(f"pokemontcg.io degradada às {e['at']:%H:%M} após {e['fails']} falhas "
+                                 f"em {e['n']}")
             else:
                 parts.append(f"voltou às {e['at']:%H:%M}")
         k = len(self.__dict__.get("_breaker_sets", ()))
@@ -5345,7 +5452,14 @@ def parse_args():
                          "falso. Passe esta flag pra rodar mesmo assim (ex.: "
                          "state-dirs diferentes que o guard não distingue, ou "
                          "diagnóstico). Use com cautela."))
-    return p.parse_args()
+    args = p.parse_args()
+    if not 0.0 <= args.source_fail_rate <= 1.0:
+        p.error("--source-fail-rate é FRAÇÃO entre 0 e 1 (ex.: 0.5 = 50%)")
+    if args.source_window < 2 or args.source_slow_s <= 0 or args.source_probe_s < 0:
+        p.error("--source-window ≥ 2, --source-slow-s > 0 e --source-probe-s ≥ 0")
+    if args.max_ref_age_days <= 0:
+        p.error("--max-ref-age-days deve ser > 0")
+    return args
 
 
 # Sets de MAIOR PRIORIDADE (era Scarlet & Violet + curados do daily). No modo
@@ -5644,6 +5758,8 @@ def main():
         language=args.language,
         max_ref_age_days=args.max_ref_age_days,
     )
+    if args.provider == "tcgcsv":
+        scanner.ptcg_alt = PokemonTcgIoProvider(_clean_secret(os.getenv("POKEMONTCG_API_KEY")), cache)
     scanner.breaker = None if args.no_source_breaker else SourceBreaker(
         window=max(2, args.source_window), min_samples=max(2, round(0.6 * max(2, args.source_window))),
         fail_rate=args.source_fail_rate, slow_s=args.source_slow_s, probe_every_s=args.source_probe_s)

@@ -173,3 +173,196 @@ def test_scanner_swaps_a_stale_main_reference_for_a_fresher_tcgcsv_one():
     fresh.pricing.last_ref_data_at = None
     fresh.max_ref_age_days = 7.0
     assert all(o.price_source != "tcgcsv" and o.ref_swap == "" for o in fresh.scan_expansion(EXP))
+
+
+# ───────── 4: fontes consultadas / não consultadas ─────────
+import dataclasses  # noqa: E402
+from datetime import datetime  # noqa: E402
+
+from test_b1e import EXP, _build  # noqa: E402
+from test_tcgcsv_fallback import _fake_groups, _fake_prices, _fake_products, _provider_with, _scanner_with  # noqa: E402
+from test_set_outcomes import _cards  # noqa: E402
+
+
+def test_breaker_open_set_says_which_source_was_not_consulted_and_why():
+    rows = [(k, "1st Edition Holofoil", 9.0) for k in range(1, 4)] + [(k, "Unlimited Holofoil", 9.0) for k in range(5, 7)]
+    s, listings = _build(6, rows, lambda i: 99.0)             # card 4 não existe no tcgcsv; 1-3 só 1st; 5-6 ok
+    s.breaker = sc.SourceBreaker()
+    s.breaker.is_open, s.breaker.opened_at = True, datetime(2026, 11, 24, 8, 28)
+    s.scan([EXP])
+    assert s.noref_rows and s.unpriced_rows
+    for r in s.noref_rows:
+        assert "pokemontcg.io não consultada: fonte degradada desde 08:28" in r["motivo"]
+        assert "tcgcsv" in r["motivo"]
+    for r in s.unpriced_rows:
+        assert "pokemontcg.io não consultada: fonte degradada desde 08:28" in r["detail"]
+        assert "tcgcsv" in r["detail"]
+
+
+def _tcgcsv_primary(tmp_rows, n=2, alt=None):
+    listings = [dataclasses.replace(l, rarity="Holo Rare") for l in _cards(n, set_code="asc")]
+    tc = _provider_with(_fake_groups(), _fake_products({k: f"{k:03d}/100" for k in range(1, n + 1)}),
+                        _fake_prices(tmp_rows))
+    s = _scanner_with({}, None, listings, tcgcsv_fallback=False, max_misses=0)
+    s.pricing, s.language = tc, "en"
+    s.ptcg_alt = alt
+    s.ct.list_blueprints = MagicMock(return_value=[{"id": l.blueprint_id, "name": l.card_name} for l in listings])
+    s.ct.list_listings_by_expansion = MagicMock(return_value=[
+        {"id": l.product_id, "blueprint_id": l.blueprint_id} for l in listings])
+    by = {l.product_id: l for l in listings}
+    s._parse_listing = MagicMock(side_effect=lambda raw, idx: by.get(raw["id"]))
+    s._passes_filters = MagicMock(return_value=True)
+    return s
+
+
+def _alt(price=None, status=None):
+    a = MagicMock()
+    a.name = "pokemontcg"
+    a.market_price_usd.return_value = price
+    a.last_tcg_url, a.last_variant_used, a.last_ptcg_rarity = None, "holofoil", None
+    a.last_set_release_date, a.last_price_source, a.last_ref_data_at = None, "pokemontcg", None
+    a.last_ref_reason, a.last_ref_status, a.last_available_keys = "sem preço Unlimited Holo (disponíveis: normal)", status, ["normal"]
+    return a
+
+
+def test_fallback_works_both_ways_tcgcsv_first_without_variant_asks_pokemontcg():
+    rows = [(1, "Normal", 3.0), (2, "Normal", 3.0)]           # só Normal: oferta Holo não casa no tcgcsv
+    alt = _alt(price=42.0)
+    s = _tcgcsv_primary(rows, alt=alt)
+    opps = list(s.scan_expansion(EXP))
+    assert len(opps) == 2 and all(o.price_source == "pokemontcg" for o in opps)
+    assert alt.market_price_usd.call_count == 2
+
+
+def test_both_sources_without_variant_register_both_reasons():
+    alt = _alt(price=None, status=cv.INCOMPATIVEL)
+    s = _tcgcsv_primary([(1, "Normal", 3.0), (2, "Normal", 3.0)], alt=alt)
+    assert list(s.scan_expansion(EXP)) == []
+    r = s.noref_rows[0]
+    assert "tcgcsv:" in r["motivo"] and "pokemontcg:" in r["motivo"]
+
+
+def test_degraded_second_source_is_not_called_just_to_fill_the_table():
+    alt = _alt(price=42.0)
+    s = _tcgcsv_primary([(1, "Normal", 3.0), (2, "Normal", 3.0)], alt=alt)
+    s.ptcg_alt_breaker = sc.SourceBreaker()
+    s.ptcg_alt_breaker.is_open, s.ptcg_alt_breaker.opened_at = True, datetime(2026, 11, 24, 8, 28)
+    s.ptcg_alt_breaker._last_probe = 10 ** 12                   # sonda não vencida
+    assert list(s.scan_expansion(EXP)) == []
+    assert alt.market_price_usd.call_count == 0
+    assert "pokemontcg.io não consultada: fonte degradada desde 08:28" in s.noref_rows[0]["motivo"]
+
+
+# ───────── 6: baixas ─────────
+def test_health_line_uses_why_and_the_time_degradation_started_and_counts_sub_threshold_failures():
+    t = [0.0]
+    b = sc.SourceBreaker(window=10, min_samples=6, fail_rate=0.5, slow_s=10.0, clock=lambda: t[0])
+    for ok in (True, False, True, True, True):
+        b.record(ok, 0.2)
+    assert not b.is_open and b.total_fail == 1 and b.total_n == 5
+    s = sc.Scanner.__new__(sc.Scanner)
+    s.breaker = b
+    assert s._source_health_line() == "pokemontcg.io saudável neste run, com 1 falha(s) em 5 ofertas (abaixo do limite)"
+    s2 = sc.Scanner.__new__(sc.Scanner)
+    s2.breaker = sc.SourceBreaker(window=10, min_samples=6, fail_rate=0.5, slow_s=10.0)
+    for _ in range(2):
+        s2.breaker.record(True, 40.0)                          # só lentidão (sem falha)
+    line = s2._source_health_line()
+    assert "por latência" in line and "falhas" not in line.split(";")[0]
+    assert "degradada desde" in line or "degradada às" in line
+    s3 = sc.Scanner.__new__(sc.Scanner)
+    s3.breaker = sc.SourceBreaker()
+    for _ in range(3):
+        s3.breaker.record(True, 0.1)
+    assert s3._source_health_line() == "pokemontcg.io saudável neste run (disjuntor não abriu)"   # nenhuma falha
+
+
+def test_probe_runs_a_representative_query_and_needs_a_card_with_prices(tmp_path):
+    p = sc.PokemonTcgIoProvider.__new__(sc.PokemonTcgIoProvider)
+    p.session = MagicMock()
+    ok = MagicMock(status_code=200)
+    ok.json.return_value = {"data": [{"id": "base1-4", "tcgplayer": {"prices": {"holofoil": {"market": 300.0}}}}]}
+    p.session.get.return_value = ok
+    assert p.probe() is True
+    params = p.session.get.call_args.kwargs["params"]
+    assert "q" in params and params["q"]                            # consulta de carta, não só pageSize=1
+    empty = MagicMock(status_code=200)
+    empty.json.return_value = {"data": []}
+    p.session.get.return_value = empty
+    assert p.probe() is False                                       # 200 vazio não prova saúde
+    bad = MagicMock(status_code=200)
+    bad.json.side_effect = ValueError("x")
+    p.session.get.return_value = bad
+    assert p.probe() is False
+
+
+def test_probe_spacing_is_respected_by_the_clock():
+    t = [100.0]
+    b = sc.SourceBreaker(window=10, min_samples=2, fail_rate=0.5, probe_every_s=120.0, clock=lambda: t[0])
+    b.record(False, 1.0)
+    b.record(False, 1.0)
+    assert b.is_open and not b.probe_due()
+    t[0] += 119
+    assert not b.probe_due()
+    t[0] += 2
+    assert b.probe_due()
+    b.mark_probe()
+    assert not b.probe_due()
+
+
+def test_latency_measured_by_the_scanner_reaches_the_breaker(monkeypatch):
+    from test_b1e import _all_rows
+    now = [0.0]
+    monkeypatch.setattr(sc.time, "monotonic", lambda: now[0])
+
+    def slow(i):
+        now[0] += 40.0                                               # cada consulta custa 40 s, sem falha
+        return 55.0
+    s, listings = _build(30, _all_rows(30), slow)
+    s.breaker = sc.SourceBreaker(window=10, min_samples=6, fail_rate=0.5, slow_s=15.0, clock=lambda: now[0])
+    list(s.scan_expansion(EXP))
+    assert len(s._calls) == 2 and s.breaker.events[0]["why"] == "latência"
+
+
+def test_http_403_counts_as_failure_for_the_breaker(tmp_path):
+    import requests as rq
+    s, listings = _build(30, [(k, "Unlimited Holofoil", 5.0 + k) for k in range(1, 31)], lambda i: 1.0)
+    p = sc.PokemonTcgIoProvider.__new__(sc.PokemonTcgIoProvider)
+    p.cache = sc.Cache(db_path=tmp_path / "c.db")
+    p._ptcg_get = MagicMock(return_value=MagicMock(status_code=403))
+    p.retry_5xx = 0
+    s.pricing = p
+    list(s.scan_expansion(EXP))
+    assert s.breaker.is_open and s.breaker.fail_count >= 3
+    assert p._ptcg_get.call_count <= 10
+
+
+def test_5xx_path_opens_the_breaker_without_hand_incremented_counters(tmp_path, monkeypatch):
+    monkeypatch.setattr(sc.time, "sleep", lambda *_: None)
+    s, listings = _build(30, [(k, "Unlimited Holofoil", 5.0 + k) for k in range(1, 31)], lambda i: 1.0)
+    p = sc.PokemonTcgIoProvider.__new__(sc.PokemonTcgIoProvider)
+    p.cache = sc.Cache(db_path=tmp_path / "c.db")
+    p.delay, p._last_call, p.retry_5xx = 0.0, 0.0, 0
+    p.session = MagicMock()
+    p.session.get.return_value = MagicMock(status_code=502, headers={})
+    s.pricing = p
+    out = list(s.scan_expansion(EXP))
+    assert s.breaker.is_open and p.retry_5xx >= 3 * 3                 # contador do PRÓPRIO provider
+    assert len(out) == 30 and s._set_status == "complete"
+
+
+def test_source_fail_rate_is_validated_between_0_and_1():
+    with patch.object(sys, "argv", ["cardtrader_scanner.py", "--source-fail-rate", "5", "--dry-run"]):
+        with pytest.raises(SystemExit) as e:
+            sc.main()
+    assert e.value.code == 2
+
+
+def test_holo_only_override_never_beats_an_explicit_non_holo_label():
+    assert cv.holo_detection("Promo", set_code="det").is_holo
+    assert not cv.holo_detection("Non-Holo", set_code="det").is_holo
+    assert not cv.holo_detection("Common Non-Holo", "Promo", set_code="det").is_holo
+
+
+def test_groups_retry_wait_is_simulated_in_the_suite():
+    assert sc.TcgCsvFallbackProvider.GROUPS_RETRY_WAIT_S == 0
