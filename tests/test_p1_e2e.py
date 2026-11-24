@@ -87,6 +87,8 @@ def test_real_xlsx_com_pc_simulado_so_compra_com_liquidez(raw, tmp_path, monkeyp
     raw["Ref Compatível"] = "Sim"
     raw["Data Ref."] = __import__("datetime").date.today().isoformat()   # B1g: idade desconhecida nunca é COMPRA
     raw["Rótulo Data Ref."] = "dado de"
+    from test_pricecharting_ref import _LUGIA
+    raw["TCG Market (USD)"] = pcr.median_ungraded_sold(_LUGIA)[0]    # B1l: PC OK exige mediana coerente com a TCG
     calls = []
 
     def fake_demand(name, number, set_label, *, edition, cache_dir=None, variant=None, today=None):
@@ -98,7 +100,7 @@ def test_real_xlsx_com_pc_simulado_so_compra_com_liquidez(raw, tmp_path, monkeyp
                 "pc_vendas_30d": 0 if n % 3 == 1 else 3, "pc_vendas_90d": 9, "pc_truncado": False}
 
     monkeypatch.setattr(pcr, "resolve_pc_demand", fake_demand)
-    monkeypatch.setattr(pcr, "fetch_page", lambda url, cache_dir=None: "<html></html>")
+    monkeypatch.setattr(pcr, "fetch_page", lambda url, cache_dir=None: _LUGIA)
     cfg = pp.DecisionConfig()
     out = tmp_path / "rel.xlsx"
     pp.write_report(raw, cfg, out, fx_usd_brl=5.5, pc_refs=10)

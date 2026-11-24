@@ -308,17 +308,39 @@ def test_property_full_path_with_hand_written_oracle():
             # inferir o holo contra um rótulo CT conclusivo só vale se a carta NÃO tem nenhuma chave normal (com ou sem preço)
             assert not any(_FIN_OF[k] == "normal" for k in prices), ("inferiu holo com impressão normal existente", ct, keys, state)
         if om.inferred is None:
-            assert ct not in (None, "", "Promo"), ("promo/vazia nunca é 'Sim' (acabamento não declarado)", ct, m.key, era, code)
-            want = decl if decl is not None else "normal"          # inconclusivo sem inferência = normal (política)
-            if code == "det" and ct in (None, "", "Promo"):
-                want = "holo" if fin == "holo" else want
-            assert fin == want, ("'Sim' com acabamento diferente do declarado", ct, ref, m.key, era, code)
+            # B1l: oráculo à mão — sem inferência, só rótulo CONCLUSIVO (tabela _declared) pode dar OK, e o acabamento
+            # tem de ser o declarado (a antiga ramificação "det" era tautologia: want = fin).
+            assert decl is not None, ("rótulo inconclusivo (vazio/Promo/Fixed) nunca é 'Sim'", ct, m.key, era, code)
+            assert fin == decl, ("'Sim' com acabamento diferente do declarado", ct, ref, m.key, era, code)
         # nunca OK com outra chave quando a chave CERTA (acabamento declarado) existe SEM preço
         if decl is not None and om.inferred is None:
             right = [k for k in prices if _FIN_OF[k] == decl and (_ED_OF[k] == "1st") == fe
                      and (prices[k]["market"] or 0) <= 0]
             assert not right or fin == decl, ("OK com outra chave com a certa sem preço", keys, state, ct)
     assert n > 30_000
+
+
+_INCONCLUSIVE = [None, "", "Promo", "Fixed", "Mystery Foil"]      # vazio, Promo, Fixed, grafia desconhecida
+
+
+def test_property_inconclusive_label_with_several_non_reverse_prints_is_never_ok_and_with_one_is_inferred():
+    """B1l: oráculo à mão. Impressões não-reverse = acabamentos distintos entre as chaves da edição pedida
+    (ou de todas, se o produto não rotula edição). >1 -> nunca OK; exatamente 1 -> OK só como Inferido."""
+    seen = {1: 0, 2: 0}
+    for ct, ref, keys, fe, era, code in itertools.product(
+            _INCONCLUSIVE, _REF_R, _KEYS, (False, True), (None, "2010-01-01", "2024-05-01"), (None, "evo")):
+        prices = {k: {"market": 2.0 + i} for i, k in enumerate(keys)}
+        om = cv.match_offer(prices, fe, False, ct, ref_rarity=ref, set_released=era, set_code=code)
+        labeled = any(_ED_OF[k] != "none" for k in keys)
+        want_ed = "1st" if fe else "unl"
+        fins = {_FIN_OF[k] for k in keys if _FIN_OF[k] != "reverse" and (not labeled or _ED_OF[k] == want_ed)}
+        if len(fins) > 1:
+            seen[2] += 1
+            assert om.match.status != cv.OK, ("rótulo inconclusivo + >1 impressão não-reverse virou OK", ct, keys, fe)
+        elif len(fins) == 1 and om.match.status == cv.OK:
+            seen[1] += 1
+            assert om.inferred is not None, ("rótulo inconclusivo + 1 impressão: OK sem 'Inferido'", ct, ref, keys, fe)
+    assert seen[1] > 100 and seen[2] > 100
 
 
 # ───────── H: todo número de fonte do resumo é derivável das linhas do XLSX ─────────

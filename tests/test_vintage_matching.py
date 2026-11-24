@@ -106,7 +106,7 @@ def test_number_query_does_not_collapse_suffix_variants(ct_number, expected):
 
 def test_price_logic_version_bumped_for_matching_change():
     # chave do price_cache inclui a versão: a lógica de casamento mudou (lotes 2/3)
-    assert sc.PRICE_LOGIC_VERSION == "3"
+    assert sc.PRICE_LOGIC_VERSION == "4"
 
 
 # ── #3: aliases (parcial: wcd2010) ──────────────────────────────────────────

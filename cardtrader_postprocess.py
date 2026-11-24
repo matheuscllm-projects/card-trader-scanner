@@ -60,7 +60,7 @@ Memorias relevantes respeitadas:
 from __future__ import annotations
 
 from chat_format import reference_price
-import argparse, os, re, sys
+import argparse, math, os, re, sys
 import ct_refage
 import ct_variants
 import pricecharting_ref
@@ -374,6 +374,13 @@ def classify_decision(row, cfg: DecisionConfig, check_liquidity: bool = True):
     # B1k: com PriceCharting COMPATIVEL (mesma edicao/acabamento, ungraded) as duas referencias precisam concordar
     # e a margem tem de passar o corte tambem pela MENOR delas. Sem PC compativel vale so a regra de liquidez.
     tcg_usd, pc_usd = _num(row.get("reference_price_usd")), _num(row.get("pc_median_usd"))
+    if str(row.get("pc_status") or "").strip() == "OK":   # B1l: PC compativel exige as DUAS referencias validas
+        if tcg_usd is None or tcg_usd <= 0:
+            return "REVISAR", f"referência principal inválida (TCG US$ ausente/não positivo); margem {nm:.0%}"
+        if pc_usd is None or pc_usd <= 0:
+            mot = str(row.get("pc_motivo") or "").strip()
+            return "REVISAR", (f"PC compatível sem mediana" + (f" ({mot})" if mot and mot.lower() != "nan" else "")
+                               + f"; margem {nm:.0%} sem checagem pela 2ª referência")
     if tcg_usd and pc_usd and tcg_usd > 0 and pc_usd > 0:
         div = ref_divergence(tcg_usd, pc_usd)
         if div > cfg.max_ref_divergence:
@@ -1336,9 +1343,8 @@ def _fmt_dh(v) -> str:
 
 
 # Referência PriceCharting (mediana de sold listings) — metodologia 2026-08-28.
-# TCG US$ mais de PC_DIVERGENCE_RATIO acima (ou abaixo) da mediana PC → flag
-# "PC diverge" na linha (sinal-only, espelho da coluna DH: margem/decisão intactas).
-PC_DIVERGENCE_RATIO = 0.30
+# TCG US$ mais de cfg.max_ref_divergence (o MESMO limite da decisao) acima/abaixo da mediana PC → flag
+# "PC diverge" na linha.
 
 
 # Vocabulario de edicao: SO o de ct_variants (codigos ED_1ST/ED_UNL e os rotulos de _ED_LABEL,
@@ -1439,8 +1445,13 @@ def attach_pc_refs(df: pd.DataFrame, cfg: DecisionConfig, top_md: int,
         if res.get("pc_status") == "OK" and res.get("pc_url"):
             try:
                 med, n_med = pricecharting_ref.median_ungraded_sold(fetch(res["pc_url"], cache_dir=cache_dir))
-            except Exception:  # noqa: BLE001 — mediana e extra; a liquidez ja foi lida
+                if not (med and math.isfinite(float(med)) and float(med) > 0):
+                    med, res = None, {**res, "pc_motivo": "mediana PC indisponível: sem venda comparável na página"}
+            except Exception as e:  # noqa: BLE001 — B1l: sem mediana a linha vira REVISAR; o motivo fica na linha e no log
                 med = None
+                res = {**res, "pc_motivo": f"mediana PC indisponível: {type(e).__name__}: {e}"[:140]}
+            if med is None:
+                print(f"[PC] {res['pc_motivo']} ({res.get('pc_url')})", file=sys.stderr)
         if res.get("pc_status") == "INDISPONIVEL_ORCAMENTO":      # teto de créditos: a página NÃO foi consultada
             res = {**res, "pc_status": "NAO_CONSULTADO_ORCAMENTO"}
         por_status[str(res.get("pc_status"))] = por_status.get(str(res.get("pc_status")), 0) + 1
@@ -1855,7 +1866,7 @@ def build_delivery_markdown(
         pc_margin = ((pc_med - ct_usd) / pc_med
                      if (pc_med and ct_usd is not None) else None)
         if (show_pc and pc_med and tcg_usd is not None and tcg_usd > 0
-                and ref_divergence(tcg_usd, pc_med) > PC_DIVERGENCE_RATIO):
+                and ref_divergence(tcg_usd, pc_med) > cfg.max_ref_divergence):
             flag = (flag + " · PC diverge").strip(" ·")
         ebay_med = _ebay_usd(row) if show_ebay else None
         if show_ratio and use_ebay and ebay_med is None:
@@ -1945,7 +1956,7 @@ def build_delivery_markdown(
             "\n_Ref PC = mediana das últimas vendas REAIS (PriceCharting, "
             "eBay+TCGPlayer, ungraded); Margem PC = (PC − CT)/PC. '—' = sem "
             "match/venda (nunca inventa). Flag 'PC diverge' = ref TCG a mais "
-            f"de {PC_DIVERGENCE_RATIO:.0%} da mediana PC — margem canônica e "
+            f"de {cfg.max_ref_divergence:.0%} da mediana PC — margem canônica e "
             "decisão NÃO mudam (sinal-only)._"
         )
     lines.append("")

@@ -54,8 +54,11 @@ def test_divergence_limit_is_configurable_and_validated():
     row = _row(net_margin=0.60, reference_price_usd=100.0, pc_median_usd=60.0)        # divergência 40% da maior
     assert pp.classify_decision(row, pp.DecisionConfig())[0] == "REVISAR"
     assert pp.classify_decision(row, pp.DecisionConfig(max_ref_divergence=0.50))[0] == "COMPRA"
-    src = (REPO_ROOT / "cardtrader_postprocess.py").read_text(encoding="utf-8")
-    assert "--max-ref-divergence" in src
+    parser = pp.build_parser()                                         # B1l: comportamento, nao grep no fonte
+    assert parser.parse_args(["-i", "a", "-o", "b"]).max_ref_divergence == pytest.approx(0.30)
+    assert parser.parse_args(["-i", "a", "-o", "b", "--max-ref-divergence", "0.5"]).max_ref_divergence == 0.5
+    with pytest.raises(SystemExit):
+        parser.parse_args(["-i", "a", "-o", "b", "--max-ref-divergence", "abc"])
 
 
 def test_pc_diverge_flag_uses_the_same_function_as_the_rule():
@@ -118,8 +121,11 @@ def test_budget_exhausted_has_its_own_not_consulted_status_and_text():
 
 def test_footer_and_xlsx_carry_the_pc_summary_and_motive():
     assert "pc_motivo" in pp._SHEET_COLS and pp._SHEET_RENAME.get("pc_motivo") == "PC Motivo"
-    src = (REPO_ROOT / "cardtrader_postprocess.py").read_text(encoding="utf-8")
-    assert "duplicada(s) evitada(s)" in src and "por status" in src
+    from test_pricecharting_ref import _pc_enriched
+    df, cfg = _pc_enriched()                                           # B1l: rodape GERADO, nao grep no fonte
+    md = pp.build_delivery_markdown(df, cfg, fx_usd_brl=5.0, pc_summary={
+        "consultas_unicas": 2, "linhas_atendidas": 5, "consultas_duplicadas_evitadas": 3, "por_status": {"OK": 2}})
+    assert "3 consulta(s) duplicada(s) evitada(s)" in md and "por status: OK 2" in md
 
 
 def test_truncated_count_meets_the_minimum_only_when_the_floor_reaches_it():

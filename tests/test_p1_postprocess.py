@@ -17,7 +17,7 @@ import pricecharting_ref as pcr
 CT = "https://www.cardtrader.com/cards/1"
 TCG = "https://www.tcgplayer.com/product/1"
 OK_PC = dict(pc_status="OK", pc_vendas_30d=2, pc_vendas_90d=7, pc_truncado=False,
-             pc_edicao="unl", pc_url="https://www.pricecharting.com/game/x/y-1")
+             pc_edicao="unl", pc_median_usd=18.0, pc_url="https://www.pricecharting.com/game/x/y-1")
 
 
 def _raw(**over):

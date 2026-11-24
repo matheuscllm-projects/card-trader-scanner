@@ -109,8 +109,10 @@ def _pc_run(edicao, limit=10):
         calls.append(edition)
         return {**OK_PC}
 
+    from test_pricecharting_ref import _LUGIA      # pagina real: a mediana PC existe (B1l: PC OK exige mediana)
+    df["reference_price_usd"] = pcr.median_ungraded_sold(_LUGIA)[0]
     pp.attach_pc_refs(df, CFG, top_md=None, limit=limit, demand_resolver=dem,
-                      page_fetcher=lambda *a, **k: "")
+                      page_fetcher=lambda *a, **k: _LUGIA)
     return df, calls
 
 
