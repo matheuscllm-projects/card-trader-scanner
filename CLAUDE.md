@@ -128,6 +128,26 @@ Exemplo: compra 75, referência 100 → margem 25% (**não** passa em 30%), ROI 
   créditos. Cache só do run (pasta `pc_cache_<timestamp>` ao lado do XLSX).
 - **Abas opcionais do scanner** `Sem preço` / `Sem Ref Compatível`: viram bloco à parte na
   entrega (sem margem, com motivo e os dois links; "TCG: sem link" quando faltar).
+- **COMPRA só é alcançável com XLSX de scanner novo (importante).** A decisão COMPRA exige as
+  colunas `Edição`, `Acabamento` e `Ref Compatível` (= Sim) emitidas pelo scanner. Com um XLSX
+  **antigo** (sem essas colunas) **tudo sai REVISAR** — nunca COMPRA —, cada linha com o motivo:
+  "referência de variante/edição não certificada pelo scanner" (sem `Ref Compatível`) e/ou
+  "edição não informada" (sem `Edição`: o postprocess não presume Unlimited e não consulta o
+  PriceCharting). Isso é proposital: quem certifica edição/variante é o scanner, o postprocess
+  só confere. COMPRA também exige preço de checkout (`LIVE R$ (real)`) na linha: validação
+  `VALIDATED_*` sem LIVE vira REVISAR.
+- **Edição:** o vocabulário vem só de `ct_variants` (`1st`/`unl` e os rótulos `1st Edition`/
+  `Unlimited`). Célula vazia, NaN ou valor fora do vocabulário (ex.: `Shadowless`) = edição **não
+  informada** (REVISAR, valor original no motivo). O `ct_variants` ainda não define um valor
+  explícito para "carta sem divisão de edição"; enquanto o scanner não emitir um, essas linhas
+  ficam REVISAR por esse motivo (pendência do scanner, não do postprocess).
+- **Destinos que não são COMPRA/REVISAR (cada causa separada, todas contadas no rodapé):** NÃO
+  (abaixo do corte), AUDITORIA (margem negativa, só na aba), **SEM REFERÊNCIA** (compra ou
+  referência inválida/ausente: o `ct_economics` não dá margem, então a linha não tem margem nem
+  lucro, nunca herda número do XLSX; bloco à parte "Sem referência" com o motivo e os links),
+  blocos `Sem preço`/`Sem Ref Compatível` (abas do scanner). Falhas operacionais do PriceCharting
+  têm status próprios (`INDISPONIVEL_403/REDE/FIRECRAWL/ORCAMENTO`) e o limite `--pc-refs`
+  esgotado é `LIMITE_CONSULTAS` (rodapé: quantas referências e linhas ficaram sem consulta).
 
 > Os números de `margem` da planilha mudaram de nome: `Margem venda %` (era `Net %`) e
 > `Lucro bruto (R$)` (era `Lucro Líq`) — o conteúdo é o mesmo cálculo do scanner na base
