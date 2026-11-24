@@ -1,0 +1,139 @@
+{
+ "exploud": [
+  {
+   "pid": 85371,
+   "name": "Exploud",
+   "number": "3/106",
+   "rarity": "Holo Rare",
+   "prices": [
+    [
+     "Normal",
+     18.72
+    ],
+    [
+     "Holofoil",
+     28.71
+    ],
+    [
+     "Reverse Holofoil",
+     49.0
+    ]
+   ]
+  }
+ ],
+ "suicune": [
+  {
+   "pid": 89597,
+   "name": "Suicune (14)",
+   "number": "14/64",
+   "rarity": "Holo Rare",
+   "prices": [
+    [
+     "1st Edition Holofoil",
+     399.95
+    ],
+    [
+     "Unlimited Holofoil",
+     223.82
+    ]
+   ]
+  }
+ ],
+ "pop5": [
+  {
+   "pid": 83840,
+   "name": "Bill's Maintenance",
+   "number": "006/017",
+   "rarity": "Uncommon",
+   "prices": [
+    [
+     "Normal",
+     15.33
+    ]
+   ]
+  },
+  {
+   "pid": 83941,
+   "name": "Boost Energy",
+   "number": "008/017",
+   "rarity": "Uncommon",
+   "prices": [
+    [
+     "Normal",
+     6.64
+    ]
+   ]
+  },
+  {
+   "pid": 84221,
+   "name": "Charmander (Delta Species)",
+   "number": "010/017",
+   "rarity": "Common",
+   "prices": [
+    [
+     "Normal",
+     46.48
+    ]
+   ]
+  },
+  {
+   "pid": 84237,
+   "name": "Charmeleon (Delta Species)",
+   "number": "005/017",
+   "rarity": "Uncommon",
+   "prices": [
+    [
+     "Normal",
+     89.99
+    ]
+   ]
+  },
+  {
+   "pid": 84756,
+   "name": "Delta Rainbow Energy",
+   "number": "009/017",
+   "rarity": "Uncommon",
+   "prices": [
+    [
+     "Normal",
+     17.56
+    ]
+   ]
+  },
+  {
+   "pid": 84894,
+   "name": "Double Rainbow Energy",
+   "number": "004/017",
+   "rarity": "Rare",
+   "prices": [
+    [
+     "Normal",
+     44.99
+    ]
+   ]
+  },
+  {
+   "pid": 85329,
+   "name": "Espeon Star",
+   "number": "016/017",
+   "rarity": "Ultra Rare",
+   "prices": []
+  },
+  {
+   "pid": 86123,
+   "name": "Ho-Oh",
+   "number": "001/017",
+   "rarity": "Rare",
+   "prices": [
+    [
+     "Normal",
+     35.0
+    ],
+    [
+     "Holofoil",
+     79.08
+    ]
+   ]
+  }
+ ]
+}

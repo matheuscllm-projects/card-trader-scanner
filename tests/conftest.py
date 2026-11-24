@@ -14,3 +14,5 @@ def _isolate_skip_list(tmp_path, monkeypatch):
     import cardtrader_scanner as sc
 
     monkeypatch.setattr(sc, "SKIP_LIST_FILE", tmp_path / "scanner_skip_list.json")
+    # B1f: espera simulada — os testes de falha do /groups não dormem os 2 s reais entre tentativas
+    monkeypatch.setattr(sc.TcgCsvFallbackProvider, "GROUPS_RETRY_WAIT_S", 0)

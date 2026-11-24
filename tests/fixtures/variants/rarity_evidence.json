@@ -1035,7 +1035,11 @@
   },
   "Secret Rare": {
    "holo_only": 492,
-   "from": "2016-11-03"
+   "from": "2008-11-05",
+   "exception_sets": [
+    "evo"
+   ],
+   "_b1f": "corte antecipado de 2016-11-03 p/ 2008-11-05: 0 exceção em 43 groups (b1f_secret_evidence.json); XY Evolutions é exceção por set"
   }
  }
 }

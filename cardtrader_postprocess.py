@@ -219,6 +219,7 @@ class DecisionConfig:
     revisar_min_net: float = 0.20        # 20-30% → REVISAR
     min_sales_90d: int = 5               # liquidez: vendas ungraded em 90d (valor do dono, configuravel)
     min_sales_30d: int = 1               # liquidez: ao menos 1 venda em 30d (idem)
+    max_ref_age_days: float = 7.0        # idade maxima da referencia (DEFAULT provisorio; o valor definitivo e do dono)
     costs: Costs = Costs()               # Hub 6% + frete R$0,50/carta; demais = nao informado
 
     @property
@@ -346,6 +347,11 @@ def classify_decision(row, cfg: DecisionConfig, check_liquidity: bool = True):
     if str(row.get("ref_compativel")).strip().lower() not in ("sim", "true", "1", "yes"):
         return "REVISAR", ("referência de variante/edição não certificada pelo scanner "
                            "(coluna 'Ref Compatível' ausente ou ≠ Sim)")
+    # B1f: referencia velha demais (limite configuravel) nunca vira COMPRA; a margem segue exibida.
+    age = _num(row.get("ref_age_dias"))
+    if age is not None and age > cfg.max_ref_age_days:
+        return "REVISAR", (f"referência desatualizada ({age:.0f} dias); máximo {cfg.max_ref_age_days:g}; "
+                           f"margem {nm:.0%} sobre preço velho")
     if not check_liquidity:
         return "COMPRA", ""
     ok, liq = liquidity_verdict(row, cfg)
@@ -419,6 +425,7 @@ COLUMN_ALIASES = {
     "price_source": ["price_source","Fonte Preço","Fonte Preco"],
     "ref_data_at": ["ref_data_at","Data Ref.","Ref. Data/Hora"],   # antigo: hora da busca ("buscado em")
     "ref_data_label": ["ref_data_label","Rótulo Data Ref.","Rotulo Data Ref."],
+    "ref_swap": ["ref_swap","Troca de Referência","Troca de Referencia"],   # B1f: fonte principal velha trocada pelo tcgcsv
     "variant_low_confidence": ["variant_low_confidence","Variante Baixa Confiança","Variante Baixa Confianca","low_confidence_variant"],
 }
 
@@ -706,7 +713,7 @@ def _sales_text(v, truncado) -> str:
     return f"{'≥' if truncado is True or truncado == 'desconhecido' else ''}{int(n)}"
 
 
-_SHEET_COLS = ["decisao", "porque", "chase_tier", "fundamental_score",
+_SHEET_COLS = ["decisao", "porque", "ref_age_dias", "ref_desatualizada", "ref_swap", "chase_tier", "fundamental_score",
                "dh_score",  # 2ª opinião DoubleHolo (só se --doubleholo; senão ausente)
                "pc_median_usd", "pc_n_sales", "pc_url",  # Ref PC (só se --pc-refs)
                "pc_status", "edicao", "acabamento",
@@ -863,6 +870,8 @@ def build_summary(df: pd.DataFrame, cfg: DecisionConfig, extra_blocks: dict | No
             origin.append((lbl, "não informado (XLSX sem aba Stats)"))
     if st.get("filtros_aplicados") is not None:
         origin.append(("Filtros aplicados", str(st.get("filtros_aplicados"))))
+    if str(st.get("cobertura_baixa") or "").strip() not in ("", "nan"):
+        origin.append(("⚠️ Cobertura baixa (menos da metade precificada)", str(st.get("cobertura_baixa"))))
     if str(st.get("saude_fonte_principal") or "").strip() not in ("", "nan"):
         origin.append(("Fonte principal de preço", str(st.get("saude_fonte_principal"))))
     for lbl, key in (("--chase-only descartou", "skipped_non_chase"),
@@ -991,6 +1000,34 @@ def _parse_dt(at):
     return d.astimezone() if d.tzinfo else d
 
 
+def _ref_date(at):
+    """Data do dado de referência -> datetime naive local (date-only vira meia-noite; com fuso é
+    convertida ao horário local). None se inválida."""
+    s = str(at or "").strip()
+    if not s or s.lower() == "nan":
+        return None
+    d = _parse_dt(s)
+    if d is None:
+        return None
+    return d.replace(tzinfo=None)
+
+
+def _add_ref_age(df: pd.DataFrame, scan_stats: dict | None, cfg: DecisionConfig) -> pd.DataFrame:
+    """B1f: `ref_age_dias` (dias entre a data do DADO e o dia do scan; só linhas "dado de") e
+    `ref_desatualizada` (marca textual quando passa do limite)."""
+    df = df.copy()
+    sa = (scan_stats or {}).get("scanned_at")
+    base = _ref_date(sa) or datetime.now()
+    ages, marks = [], []
+    for _, r in df.iterrows():
+        d = _ref_date(r.get("ref_data_at")) if str(r.get("ref_data_label") or "").strip() == "dado de" else None
+        age = float((base.date() - d.date()).days) if d is not None else float("nan")
+        ages.append(age)
+        marks.append(f"referência desatualizada ({age:.0f} dias)" if age == age and age > cfg.max_ref_age_days else "")
+    df["ref_age_dias"], df["ref_desatualizada"] = ages, marks
+    return df
+
+
 def _fmt_ref_date(label, at) -> str:
     """"dado de 2026-11-23 17:05 (UTC-03:00)" (data do DADO) ou "buscado em ..." (hora da busca,
     também o rótulo quando a coluna é a antiga "Ref. Data/Hora"). Mostra SEMPRE o fuso quando o
@@ -999,6 +1036,8 @@ def _fmt_ref_date(label, at) -> str:
         return "—"
     lbl = "" if label is None or (isinstance(label, float) and pd.isna(label)) else str(label).strip()
     lbl = lbl or "buscado em"
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(at).strip()):
+        return f"{lbl} {str(at).strip()}"                       # data do dado sem hora/fuso (pokemontcg.io)
     d = _parse_dt(at)
     if d is None:
         return f"{lbl} {str(at).strip()[:16].replace('T', ' ')}"
@@ -1017,9 +1056,8 @@ def _sources_line(df: pd.DataFrame, scan_stats: dict | None) -> str:
     ref_at = df["ref_data_at"] if "ref_data_at" in df.columns else None
     lbl = df["ref_data_label"] if "ref_data_label" in df.columns else None
     sa = (scan_stats or {}).get("scanned_at")
-    scan_dt = _parse_dt(sa) if sa else None
     from datetime import datetime as _dt
-    ref_now = scan_dt or _dt.now().astimezone()
+    ref_now = _ref_date(sa) or _dt.now()
     parts = []
     for src, g in df.groupby(df["price_source"].fillna("—").astype(str)):
         txt = f"{src}: {len(g)} linha(s)"
@@ -1031,14 +1069,17 @@ def _sources_line(df: pd.DataFrame, scan_stats: dict | None) -> str:
                 lv = lbl.get(k) if lbl is not None else None
                 if str(lv or "").strip() != "dado de":
                     continue
-                v = ref_at.get(k)
-                d = _parse_dt(v) if pd.notna(v) else None
-                if d is not None and d.tzinfo:
+                d = _ref_date(ref_at.get(k)) if pd.notna(ref_at.get(k)) else None
+                if d is not None:
                     dts.append(d)
         if dts:
-            old = min(dts)
+            old, new = min(dts), max(dts)
             hrs = max(0.0, (ref_now - old).total_seconds() / 3600)
-            txt += f"; dado publicado há {hrs:.0f} h no momento do scan ({_fmt_ref_date('dado de', old.isoformat())})"
+            age = f"{hrs:.0f} h" if hrs < 48 else f"{int((ref_now.date() - old.date()).days)} dias"
+
+            def f(d):
+                return d.strftime("%Y-%m-%d") if (d.hour, d.minute) == (0, 0) else d.strftime("%Y-%m-%d %H:%M")
+            txt += f"; dado mais antigo {f(old)} (publicado há {age} no momento do scan), mais novo {f(new)}"
         else:
             txt += "; sem data do dado (só a hora da busca)"
         parts.append(txt)
@@ -1081,6 +1122,9 @@ def _origin_lines(scan_stats: dict | None, n_priced: int) -> list[str]:
     sh = st.get("saude_fonte_principal")
     if sh is not None and str(sh).strip() and str(sh) != "nan":
         out.append(f"_Fonte principal de preço: {str(sh).strip()}._")
+    cb = st.get("cobertura_baixa")
+    if cb is not None and str(cb).strip() and str(cb) != "nan":
+        out.append(f"_⚠️ Cobertura baixa (menos da metade das ofertas precificada): {str(cb).strip()}._")
     nc, no = num("skipped_non_chase"), num("opportunities_only_descartadas")
     if nc:
         out.append(f"_--chase-only descartou {nc} oferta(s) antes da precificação (não aparecem em nenhuma aba)._")
@@ -1737,6 +1781,12 @@ def build_delivery_markdown(
         else:
             flag = (f"validar manual: {row.get('motivo')}"
                     if str(row.get("decisao")) == "REVISAR" else "")
+        _mk = str(row.get("ref_desatualizada") or "").strip()
+        if _mk and _mk.lower() != "nan":
+            flag = (flag + " · " + _mk).strip(" ·")
+        _sw = str(row.get("ref_swap") or "").strip()
+        if _sw and _sw.lower() != "nan":
+            flag = (flag + " · " + _sw).strip(" ·")
         # PC: mediana das vendas reais + margem sobre ela (mesma base revenda do
         # scanner: (PC − CT)/PC). Sem dado → "—". Divergência TCG↔PC > ratio →
         # flag "PC diverge" (sinal-only, não muda margem/decisão).
@@ -1900,6 +1950,7 @@ def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path,
     pricecharting_ref.set_firecrawl_budget(pc_firecrawl)   # default 0 = nunca paga
     run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     df = enrich_df(df, costs=cfg.costs)
+    df = _add_ref_age(df, scan_stats, cfg)
     # Referência PriceCharting (--pc-refs N): liquidez (vendas 30d/90d da pagina da MESMA
     # edicao) + mediana ungraded, por consulta UNICA, em ordem de lucro decrescente.
     # Cache so DESTE run (pasta nova por coleta). 0 = desligado (liquidez nao verificada).
@@ -2045,6 +2096,10 @@ def build_parser():
     p.add_argument("--min-net-margin", type=float, default=0.30,
                    help="Corte de COMPRA: margem sobre a VENDA (ref-compra)/ref, em FRACAO "
                         "(default 0.30 = 30%%; decisao do dono). Nao e ROI.")
+    p.add_argument("--max-ref-age-days", type=float, default=7.0,
+                   help=("B1f: idade máxima (dias) do dado da referência; linha mais velha leva a marca "
+                         "'referência desatualizada (N dias)' e nunca sai COMPRA (vai a REVISAR; a margem "
+                         "continua exibida). Default 7 é PROVISÓRIO: o valor definitivo é do dono."))
     p.add_argument("--min-sales-90d", type=int, default=5,
                    help="Liquidez: minimo de vendas ungraded nos ultimos 90 dias na pagina "
                         "PriceCharting da mesma edicao (default 5; configuravel). "
@@ -2154,6 +2209,7 @@ def main():
         revisar_min_net=args.revisar_min_net,
         min_sales_90d=args.min_sales_90d,
         min_sales_30d=args.min_sales_30d,
+        max_ref_age_days=args.max_ref_age_days,
         costs=costs,
     )
     df = pd.read_excel(args.input)
