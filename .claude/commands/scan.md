@@ -145,6 +145,10 @@ PriceCharting compatível que **diverge** mais que `--max-ref-divergence` (0,30)
 abaixo de 30% = REVISAR. COMPRA exige **liquidez** (≥5 vendas/90d e ≥1/30d). Linha que ficou sem consulta por
 orçamento Firecrawl esgotado aparece como `NAO_CONSULTADO_ORCAMENTO`; a coluna **PC Motivo** explica por quê.
 
+Se o scanner sair com código **20, 21, 22 ou 23** (validação parcial / sem preço live válido / validação falhou /
+set em falha operacional), o XLSX foi gravado e o relatório É gerado mesmo assim: rode o postprocess e **leia o aviso
+do cabeçalho** ("⚠ set(s) NÃO avaliados…") antes de colar; sets avaliados com falha precisam rodar de novo. Tabela completa dos códigos no CLAUDE.md.
+
 (**sem `--top-md`**: a entrega mostra TODAS as linhas de COMPRA e REVISAR. Se alguém limitar com
 `--top-md N`, o cabeçalho diz "mostrando N de M" e o rodapé diz quantas ficaram de fora e que
 elas estão na aba `Deals` do XLSX.)

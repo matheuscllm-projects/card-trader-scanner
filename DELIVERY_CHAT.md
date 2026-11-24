@@ -91,3 +91,16 @@ O integrado deve chamar as fontes nesta execução, sem carregar arquivos antigo
 - B1l: COMPRA com PriceCharting `OK` exige mediana válida ("PC compatível sem mediana" = REVISAR); a flag
   `PC diverge` usa o mesmo `--max-ref-divergence` (0,30) da decisão.
 - B1m: preço live inválido na validação = REVISAR com "preço não validado" (nunca COMPRA, nunca "sem referência").
+
+## B1n–B1q — o que ler no cabeçalho e nas colunas de preço
+
+- Se o cabeçalho trouxer "⚠ N set(s) NÃO avaliados por falha operacional", esses sets não foram olhados: a falta de
+  deals neles não significa nada, tente de novo. "Sem cobertura" = a fonte não tem o set; "pulados pela skip-list" =
+  decisão registrada antes, não avaliados neste run. O scanner pode ter saído com código 20-23 (o relatório é gerado
+  mesmo assim); o aviso do cabeçalho manda.
+- `Preço CT validado (R$)` = só o preço de checkout validado (vazio se não validou); `Preço usado na conta (R$)` =
+  o que entrou na margem (o validado, ou o cru do scan).
+- `pokemon_reverse` ausente no payload = acabamento não declarado → Inferido (REVISAR).
+- Nota honesta sobre o câmbio: o preço do scan por expansão vem em USD e é convertido pelo câmbio oficial (~5,87);
+  o checkout em BRL da CardTrader sai cerca de 17,6% acima (cotação efetiva ~6,90; ~7,80 em alguns vendedores). Por
+  isso a margem de linha NÃO validada está inflada: só a margem com preço validado (LIVE) vale para decisão.

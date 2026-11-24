@@ -743,6 +743,47 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
 - **Contadores:** o resumo e o rodapé contam por fonte (derivados das linhas, não de variáveis soltas),
   incluindo quantas linhas saíram Inferido por set.
 
+### B1n–B1q — códigos de saída, canário de formato e a nota do câmbio
+
+- **Tabela única de códigos de saída** (a fonte é o comentário "TABELA DE CÓDIGOS DE SAÍDA" em
+  `cardtrader_scanner.py`; os `.ps1` só referenciam). Precedência com várias condições: 22 > 21 > 23 > 20; 130 vence tudo.
+
+| Código | Quem | O que significa | O que o launcher `.ps1` faz |
+|---|---|---|---|
+| 0 | scanner | ok | roda o postprocess |
+| 1 | scanner | erro fatal (`CT_JWT` ausente/ilegível, exceção) | aborta (sai com 1) |
+| 2 | scanner | argumentos inválidos ou run-guard (outro scan no mesmo `--state-dir`); nada foi escrito | aborta (sai com 2) |
+| 20 | scanner | validação per-blueprint PARCIAL (erro de API e/ou moeda não suportada em alguns candidatos); XLSX completo | roda o postprocess se o XLSX bruto foi escrito NESTE run; termina com 20 |
+| 21 | scanner | NENHUM preço live válido (0/ausente/não finito); XLSX completo, linhas REVISAR | idem 20; termina com 21 |
+| 22 | scanner | validação falhou por completo (erro de API em TODOS os candidatos) | idem 20; termina com 22 |
+| 23 | scanner | scan concluído, mas há set(s) em falha operacional (canário de formato, 5xx, rede, disjuntor, timeout); vale também com `--validate-top 0` | idem 20; termina com 23 |
+| 96 | launcher | o postprocess falhou: nenhuma entrega gerada (vence o código do scanner) | sai com 96 |
+| 97 / 98 / 99 | launcher | venv do Python / arquivo de códigos de set / pasta do repo ausentes | sai com o código, sem rodar nada |
+| 130 | scanner | interrompido (Ctrl-C); XLSX parcial | aborta (sai com 130) |
+
+  Nos códigos 20-23 o XLSX bruto só é aproveitado se foi gravado durante o run atual (um arquivo de run anterior
+  nunca é reaproveitado). Sem saída 0 silenciosa: o launcher termina com o código do scanner quando ele não é 0.
+- **Cabeçalho da entrega:** o postprocess imprime, a partir das abas de desfecho do scanner, uma linha por tipo:
+  "⚠ N set(s) NÃO avaliados por falha operacional: … — tentar de novo" (a ausência de deals neles não significa
+  nada), "N set(s) sem cobertura: …" e "N set(s) pulados pela skip-list (decisão registrada, não avaliados neste
+  run)". Sem essas abas (XLSX antigo) o cabeçalho diz que não dá para afirmar que todos os sets foram avaliados.
+- **Canário de formato da API:** chaves obrigatórias do listing: `graded`, `condition`, `pokemon_language` e
+  `user.username`. Listing sem alguma delas é descartado e contado. Se, num set, uma chave falta em pelo menos 2
+  listings E em ≥10% deles (ou em todos), ou se TODAS as ofertas foram descartadas, o formato da API mudou: o set sai
+  `operational_failure` com motivo `api_format_changed_<chave>` (nunca complete nem sem cobertura; não vai para a
+  skip-list) e o run termina com código 23. As ofertas válidas desse set NÃO seguem para precificação.
+- **`pokemon_reverse` ausente:** a oferta segue, mas o acabamento não foi declarado pela CardTrader: vira Inferido
+  (REVISAR), com o motivo "campo pokemon_reverse ausente no payload". `user_type` e `can_sell_via_hub` ausentes têm
+  default seguro e só são contados.
+- **Funil de ofertas:** o resumo diz "baixadas N = após filtros + duplicadas + reprovadas nos filtros + sem
+  blueprint + sem preço CT válido + payload inesperado + moeda não suportada + descartadas pelo canário"; a soma fecha.
+- **Colunas de preço:** `Preço CT validado (R$)` é SÓ o preço de checkout (LIVE) validado, vazio se não validou;
+  `Preço usado na conta (R$)` é o que entrou na margem (o validado, ou o preço cru do scan quando não houve validação).
+- **Nota honesta sobre o câmbio (informada pelo dono, medida no checkout):** o preço do scan por expansão vem em USD
+  e é convertido pelo câmbio oficial (~5,87), mas o checkout em BRL da CardTrader sai cerca de 17,6% acima (cotação
+  efetiva ~6,90; ~7,80 em alguns vendedores). Por isso a margem de linha NÃO validada está inflada: só a margem com
+  preço validado (LIVE) vale para decisão.
+
 ## Scanner paralelo: Dragon Ball Super (`dbs_scanner.py`)
 
 > **Decisão do operador (2026-07-17):** a frota era Pokémon-only e deixava passar
