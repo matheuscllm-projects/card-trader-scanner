@@ -594,6 +594,36 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
 
 ---
 
+## Edição, acabamento e referência compatível (B1, 2026-11)
+
+- **Correspondência EXATA** (decisão do dono): a oferta tem edição (`first_edition` do
+  `properties_hash`: 1st Edition / Unlimited) e acabamento (Normal / Holo / Reverse). A
+  referência só vale se a chave de preço tiver o **mesmo par**; não existe mais escada de
+  fallback (reverse→holofoil→normal), nem exclusão de 1st Edition, e Shadowless nunca é
+  referência. A lógica mora em `ct_variants.py` (única); os providers pokemontcg e tcgcsv
+  (primário e resgate) só chamam `match_reference_variant`.
+- **Sem referência compatível = sem margem e sem recomendação.** A oferta vai para a aba
+  **"Sem Ref Compatível"** (carta, set, nº, edição, acabamento, preço CT, link, motivo, chaves
+  que a fonte tinha) e para o checkpoint. **Não** conta como miss de cobertura (não entra na
+  skip-list). A soma fecha em todo caminho: precificadas + sem preço + sem ref compatível =
+  total de ofertas (inclusive após exceção ou Ctrl-C).
+- **Colunas do XLSX:** `Edição` (`1st Edition` | `Unlimited` | `Sem divisão de edição` para
+  carta sem divisão, ex. moderno; célula vazia = não informada), `Acabamento`, `Ref Compatível`
+  (`Sim` só com par idêntico) e `Variant` (a chave de referência usada). Dedup: `uid` inclui
+  edição e reverse (1st/Unlimited do mesmo vendedor viram linhas separadas).
+- **Per-blueprint** só considera ofertas da MESMA edição; sem `first_edition` no payload (quando
+  a oferta é 1st, ou a chave existia no scan) o status é `NAO_CONFIRMAVEL` com o motivo.
+- **Margem:** só `ct_economics.compute`. O corte (`--threshold`) é `margem_venda` (sobre a
+  venda; ROI é outra métrica). `--hub-fee` (default 0,06) agora só alimenta as colunas
+  **líquidas** de preço cru; o preço validado do checkout já embute o Hub
+  (`compra_inclui_hub=True`) — nunca contado duas vezes. Frete de compra fixo R$ 0,50
+  (`--shipping-brl` > 0 substitui). **Chase:** regra única em `ct_chase.py`, só informativa.
+- Raridades vistas na CardTrader (leitura real, par/twm/sfa/obf/pal): Common, Uncommon, Rare,
+  Holo Rare, Ultra Rare, Secret Rare, Illustration Rare, Special Illustration Rare, Rare ACE,
+  Promo. A CardTrader **não** envia "Double Rare" (usa "Ultra Rare"); todas as grafias de holo
+  são reconhecidas por `ct_variants.holo_detection` com a data de lançamento do set
+  (`releaseDate` da pokemontcg.io; `publishedOn` do group no tcgcsv).
+
 ## Scanner paralelo: Dragon Ball Super (`dbs_scanner.py`)
 
 > **Decisão do operador (2026-07-17):** a frota era Pokémon-only e deixava passar

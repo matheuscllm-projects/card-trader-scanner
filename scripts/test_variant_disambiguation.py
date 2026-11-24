@@ -88,7 +88,8 @@ PICHU_ECARD1 = {
         "prices": {
             "holofoil":          {"low": 200.0, "mid": 220.0, "market": 224.99},
             "reverseHolofoil":   {"low": 100.0, "mid": 118.0, "market": 120.57},
-            "1stEditionHolofoil": {"low": 600.0, "mid": 700.0, "market": 750.00},
+            # B1: a chave 1stEditionHolofoil saiu do fixture — misturada com `holofoil` sem
+            # rótulo de edição ela é AMBÍGUA (ct_variants → sem referência compatível).
         },
     },
 }
@@ -264,11 +265,11 @@ m = p.market_price_usd("Pidgey", "xy1", "99", foil=False, rarity="Common")
 assert_eq(m, 0.50, "Pidgey common → normal $0.50 (não reverse $3.00)")
 assert_eq(p.last_variant_used, "normal", "Pidgey common → variant=normal")
 
-# Test 8e: helper _rarity_is_holo
-assert_eq(scanner._rarity_is_holo("Holo Rare"), True, "_rarity_is_holo('Holo Rare')")
-assert_eq(scanner._rarity_is_holo("Rare Holo EX"), True, "_rarity_is_holo('Rare Holo EX')")
-assert_eq(scanner._rarity_is_holo("Common"), False, "_rarity_is_holo('Common')")
-assert_eq(scanner._rarity_is_holo(None, "Rare"), False, "_rarity_is_holo(None,'Rare')")
+# Test 8e: ct_variants.rarity_is_holo (B1: helper do scanner removido)
+assert_eq(__import__("ct_variants").rarity_is_holo("Holo Rare"), True, "_rarity_is_holo('Holo Rare')")
+assert_eq(__import__("ct_variants").rarity_is_holo("Rare Holo EX"), True, "_rarity_is_holo('Rare Holo EX')")
+assert_eq(__import__("ct_variants").rarity_is_holo("Common"), False, "_rarity_is_holo('Common')")
+assert_eq(__import__("ct_variants").rarity_is_holo(None, "Rare"), False, "_rarity_is_holo(None,'Rare')")
 
 # ──────────────────────────────────────────────────────────────────────
 # Layer 5 — postprocess alpha-suffix filter
