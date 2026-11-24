@@ -309,3 +309,22 @@ def test_viv_regirock_label_conflict_stays_incompatible():
     prov = _real_provider("viv", 2701, "SWSH04: Vivid Voltage", "2020-11-13T00:00:00", rows)
     assert prov.market_price_usd("Regirock", "viv", "088/185", rarity="Holo Rare") is None
     assert prov.last_ref_status == cv.INCOMPATIVEL
+
+
+# ───────── 4: rodapé da entrega repete a fonte e a saúde ─────────
+def test_delivery_footer_repeats_source_count_and_source_health(tmp_path):
+    from test_b1b_delivery import _opp, _run_pp
+    md, _ = _run_pp(tmp_path, [_opp(0), _opp(1)], stats={
+        "listings_fetched": 100, "listings_after_filters": 80,
+        "saude_fonte_principal": "pokemontcg.io degradada às 05:12 após 4 falhas em 6; 2 sets atendidos pelo tcgcsv"})
+    assert "_Fontes das referências:" in md                                  # contagem por fonte (já existia)
+    assert "pokemontcg.io degradada às 05:12 após 4 falhas em 6" in md       # saúde da fonte no rodapé
+
+
+def test_breaker_opens_after_two_very_slow_offers_not_six():
+    """Cenário real: cada oferta com 502 gasta 3 tentativas × Retry-After 30 s = ~90 s."""
+    b = sc.SourceBreaker(window=10, min_samples=6, fail_rate=0.5, slow_s=15.0)
+    b.record(False, 90.0)
+    assert not b.is_open                    # 1 amostra só não basta
+    assert b.record(False, 90.0) and b.is_open
+    assert b.fail_count == 2 and b.sample_count == 2

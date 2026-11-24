@@ -3215,6 +3215,8 @@ class SourceBreaker:
     média > `slow_s`. Aberto: o resto do set e os sets seguintes vão direto ao tcgcsv (mesma
     regra exata de casamento); a cada `probe_every_s` uma sonda barata decide se volta."""
 
+    MIN_SLOW_SAMPLES = 2
+
     def __init__(self, window: int = 10, min_samples: int = 6, fail_rate: float = 0.5,
                  slow_s: float = 15.0, probe_every_s: float = 120.0, clock=time.monotonic):
         self.window, self.min_samples = window, min_samples
@@ -3242,11 +3244,11 @@ class SourceBreaker:
         self._w.append((bool(ok), float(latency_s)))
         del self._w[:-self.window]
         n = len(self._w)
-        if n < self.min_samples:
-            return False
         fails = sum(1 for o, _ in self._w if not o)
-        slow = sum(lat for _, lat in self._w) / n > self.slow_s
-        if fails / n >= self.fail_rate or slow:
+        # lentidão (retries + Retry-After custam dezenas de s por oferta): bastam 2 amostras;
+        # taxa de falha pede o mínimo da janela
+        slow = n >= self.MIN_SLOW_SAMPLES and sum(lat for _, lat in self._w) / n > self.slow_s
+        if slow or (n >= self.min_samples and fails / n >= self.fail_rate):
             self.is_open, self.opened_at = True, datetime.now()
             self.open_fail, self.open_n = fails, n
             self._last_probe = self._clock()

@@ -863,6 +863,8 @@ def build_summary(df: pd.DataFrame, cfg: DecisionConfig, extra_blocks: dict | No
             origin.append((lbl, "não informado (XLSX sem aba Stats)"))
     if st.get("filtros_aplicados") is not None:
         origin.append(("Filtros aplicados", str(st.get("filtros_aplicados"))))
+    if str(st.get("saude_fonte_principal") or "").strip() not in ("", "nan"):
+        origin.append(("Fonte principal de preço", str(st.get("saude_fonte_principal"))))
     for lbl, key in (("--chase-only descartou", "skipped_non_chase"),
                      ("--opportunities-only descartou", "opportunities_only_descartadas")):
         try:
@@ -1076,6 +1078,9 @@ def _origin_lines(scan_stats: dict | None, n_priced: int) -> list[str]:
            f"filtros): {fetched if fetched is not None else '?'} → após filtros: "
            f"{after if after is not None else '?'}{txt}; linhas neste relatório (precificadas + sem preço + sem "
            f"ref. compatível): {n_priced}._"]
+    sh = st.get("saude_fonte_principal")
+    if sh is not None and str(sh).strip() and str(sh) != "nan":
+        out.append(f"_Fonte principal de preço: {str(sh).strip()}._")
     nc, no = num("skipped_non_chase"), num("opportunities_only_descartadas")
     if nc:
         out.append(f"_--chase-only descartou {nc} oferta(s) antes da precificação (não aparecem em nenhuma aba)._")
