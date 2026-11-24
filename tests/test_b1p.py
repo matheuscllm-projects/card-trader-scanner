@@ -19,7 +19,7 @@ for _p in (REPO_ROOT, Path(__file__).resolve().parent):
 
 import cardtrader_postprocess as pp  # noqa: E402
 import cardtrader_scanner as sc  # noqa: E402
-from test_b1o import _flow, _raw, POWERSHELL, needs_powershell  # noqa: E402
+from test_b1o import _flow, _raw, POWERSHELL, needs_powershell, needs_windows_powershell  # noqa: E402
 
 
 # ───────── 2) canário contínuo: sem descontinuidade 19/20 ─────────
@@ -174,7 +174,7 @@ def _fake_repo(tmp_path):
     return repo
 
 
-@needs_powershell
+@needs_windows_powershell
 @pytest.mark.parametrize("ps1,extra", [("run_weekly_local.ps1", []), ("run_priority_scan.ps1", ["-Sets", "uf"])])
 @pytest.mark.parametrize("scanner_exit,expect_exit,post_runs", [
     (0, 0, True), (23, 23, True), (22, 22, True), (20, 20, True), (2, 2, False), (1, 1, False)])

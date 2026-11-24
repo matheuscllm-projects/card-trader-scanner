@@ -194,6 +194,12 @@ POWERSHELL = shutil.which("powershell") or shutil.which("pwsh")
 needs_powershell = pytest.mark.skipif(
     POWERSHELL is None, reason="PowerShell indisponível neste runner; os launchers .ps1 são só Windows")
 
+# Os launchers .ps1 inteiros usam caminhos do Windows (.venv\Scripts\python.exe): só rodam de verdade no Windows,
+# mesmo que exista `pwsh` no Linux. A função de decisão (pura) roda onde houver PowerShell.
+needs_windows_powershell = pytest.mark.skipif(
+    POWERSHELL is None or os.name != "nt",
+    reason="PowerShell indisponível neste runner; os launchers .ps1 são só Windows")
+
 
 def _decide(exit_code, raw_exists, raw_age_s, tmp_path):
     raw = tmp_path / "raw.xlsx"

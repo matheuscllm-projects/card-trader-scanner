@@ -20,7 +20,7 @@ for _p in (REPO_ROOT, Path(__file__).resolve().parent):
 
 import cardtrader_postprocess as pp  # noqa: E402
 import cardtrader_scanner as sc  # noqa: E402
-from test_b1o import FINAL4, POWERSHELL, _flow, _raw, needs_powershell  # noqa: E402
+from test_b1o import FINAL4, POWERSHELL, _flow, _raw, needs_windows_powershell  # noqa: E402
 from test_b1p import _fake_repo, SCRIPTS  # noqa: E402
 
 import datetime as _dt
@@ -112,7 +112,7 @@ def test_exit_96_is_in_the_single_table():
     assert "96" in t
 
 
-@needs_powershell
+@needs_windows_powershell
 @pytest.mark.parametrize("ps1,extra", [("run_weekly_local.ps1", []), ("run_priority_scan.ps1", ["-Sets", "uf"]),
                                        ("run_critical_resscan.ps1", ["-Sets", "uf"]), ("run_weekly_2026-05-19.ps1", [])])
 @pytest.mark.parametrize("scanner_exit,post_exit,expect", [
