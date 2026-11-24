@@ -171,7 +171,7 @@ def test_partial_coverage_is_not_skiplisted(tmp_path, monkeypatch, ):
                             tcgcsv_fallback=False, max_misses=2)
     opps, done, skip = _run(scanner, listings, tmp_path, monkeypatch)
     assert skip == {}, skip
-    assert done[0]["status"] == "no_coverage", done
+    assert done[0]["status"] == "complete_with_unpriced", done  # set coberto (1 hit)
     assert done[0]["unpriced"] == 5, done
 
 
@@ -231,7 +231,7 @@ def test_partial_rescue_is_never_complete_and_rows_are_kept(tmp_path, monkeypatc
                             listings, max_misses=40)  # Card 4 sem preço em nenhuma fonte
     opps, done, skip = _run(scanner, listings, tmp_path, monkeypatch)
     assert len(opps) == 3
-    assert done[0]["status"] == "no_coverage" and done[0]["unpriced"] == 1, done
+    assert done[0]["status"] == "complete_with_unpriced" and done[0]["unpriced"] == 1, done
     kept = [r for r in scanner.unpriced_rows if r["card"] == "Card 4"]
     assert len(kept) == 1 and kept[0]["reason"] == "sem_cobertura", scanner.unpriced_rows
     assert kept[0]["link"].startswith("https://"), kept
@@ -241,11 +241,12 @@ def test_reference_carries_source_and_timestamp(tmp_path, monkeypatch):
     listings = _cards(2)
     scanner = _scanner_with({("asc", "001/100"): 100.0}, _tcgcsv_for([2]), listings, max_misses=40)
     scanner.pricing.last_price_fetched_at = "2026-11-24T10:00:00"
+    monkeypatch.setattr(sc, "now_iso", lambda: "2026-11-24T11:30:00-03:00")
     opps, _, _ = _run(scanner, listings, tmp_path, monkeypatch)
     by = {o.listing.card_name: o for o in opps}
     assert by["Card 1"].price_fetched_at == "2026-11-24T10:00:00"
     assert by["Card 2"].price_source == "tcgcsv"
-    assert len(by["Card 2"].price_fetched_at) >= 19  # ISO datetime do prefill deste run
+    assert by["Card 2"].price_fetched_at == "2026-11-24T11:30:00-03:00"  # prefill deste run
 
 
 def test_xlsx_has_reference_time_column_and_unpriced_sheet(tmp_path, monkeypatch):

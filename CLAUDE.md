@@ -170,8 +170,8 @@ estão divididos em **6 grupos por recência** (G1 = Mega Evolution até Chaos
 Rising + era SV … G6 = EX inicial + e-Card + WotC), cada um ≤~2h30 de scan —
 runs mais longos morriam sem entregar. O skill **sempre pergunta quais grupos
 rodar**, roda um por vez (nunca em paralelo) com os valores canônicos
-(threshold 0.30, validate-top 30, min-net-margin 0.20, max-consecutive-misses
-40) e entrega **cada grupo**
+(threshold 0.30, min-net-margin 0.20, max-consecutive-misses 40; **sem**
+`--validate-top`: valida todas) e entrega **cada grupo**
 pela tabela do postprocess assim que termina. `/scan pre ssp` = sets custom;
 `/scan total` = catálogo inteiro via workflow semanal. A partição é travada por
 teste (`tests/test_scan_skill_profiles.py`) contra o mapa do scanner. **Nenhum
@@ -192,7 +192,7 @@ use exatamente os valores canônicos:
 .venv\Scripts\python.exe cardtrader_scanner.py \
   --sets sfa scr par paf tef twm ssp dri blk jtg \   # quais coleções (códigos CardTrader)
   --threshold 0.30 \                                  # margem mínima 30% (FRAÇÃO!)
-  --validate-top 30 \                                 # confere os 30 melhores de verdade
+                                                      # (sem --validate-top = confere TODAS)
   --min-net-margin 0.20 \                             # descarta lucro líquido < 20%
   --output outputs/scan_da_vez.xlsx                   # onde salvar a planilha
 
@@ -209,7 +209,7 @@ use exatamente os valores canônicos:
 
 - `--validate-top`: omitido = valida **todas** (Lote 3). `N` limita, `0` desliga
   (sem validação ~76% dos achados são falsos). Os comandos canônicos do skill
-  `/scan` ainda passam `30` explícito.
+  `/scan` **não passam** a flag (validam todas).
 - `--min-net-margin`: default **0.0 no scanner** e **0.25 no postprocess** —
   o comando canônico passa `0.20` explícito no scanner; no postprocess, quem
   quiser o mesmo corte precisa passar explicitamente.
@@ -515,14 +515,20 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
 
 ## Desfecho de cada set, skip-list e resgate tcgcsv (Lote 3, 2026-11)
 
-- **Três desfechos por set** (gravados no `set_complete` do checkpoint e no
-  resumo do run): `complete` · `no_coverage` (a fonte respondeu e não tem as
-  cartas; `unpriced` = quantas ficaram sem preço) · `operational_failure`
-  (timeout, 5xx, erro de rede, erro inesperado, falha em massa de preço — **tentar
-  de novo**; aparece no resumo como "NÃO CONCLUÍDOS — tentar de novo").
-- **Skip-list só para ausência EFETIVA de cobertura:** corte por misses
-  consecutivos **e** nada do set precificado (nem pelo resgate). Falha
-  operacional **nunca** entra na skip-list. Entradas antigas continuam sendo
+- **Quatro desfechos por set** (gravados no `set_complete` do checkpoint e no
+  resumo do run): `complete` (tudo precificado) · `complete_with_unpriced` (o set
+  foi coberto; N ofertas ficaram sem referência e estão na aba "Sem preço") ·
+  `no_coverage` (a fonte respondeu e **nada** do set foi precificado) ·
+  `operational_failure` (timeout, 5xx, erro de rede, erro inesperado, falha em
+  massa de preço, tcgcsv fora do ar no resgate — **tentar de novo**; aparece no
+  resumo como "NÃO CONCLUÍDOS — tentar de novo").
+- **Skip-list só para `no_coverage` de verdade:** corte por misses consecutivos
+  **e** nada do set precificado (nem pelo resgate) **e** o resgate não falhou.
+  Falha operacional **nunca** entra na skip-list.
+- **Validação com retomada:** o resultado de cada validação per-blueprint é
+  gravado no checkpoint; um run interrompido (mesmo `--output`) reaproveita o que
+  foi validado há ≤ 3 h e refaz só o que falta ou deu erro de API. O log mostra
+  progresso (blueprints, erros, 429). Entradas antigas continuam sendo
   lidas e expiram (TTL 7 dias para `no_coverage_`, `network_error_`, timeouts).
 - **Resgate tcgcsv:** tudo que a pokemontcg.io não precificou (misses do fim do
   set, falhas, listings não alcançados) é oferecido ao tcgcsv (referência buscada
