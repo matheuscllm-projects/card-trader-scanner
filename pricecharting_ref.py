@@ -12,12 +12,15 @@ Invariantes da frota respeitados:
   - É coluna de SANIDADE na entrega (`--pc-refs` no postprocess): não muda a
     margem canônica nem a classificação COMPRA/REVISAR — espelho da coluna DH.
 
-Scrape leve com urllib + cache 24h em disco (padrão validado no
+Scrape leve com urllib + cache SÓ DENTRO DO RUN, em memória (DELIVERY_CHAT: nunca
+reutilizar preço de outro scan; `new_run()` zera; cada valor guarda quando foi
+buscado — padrão validado no
 ebay-arbitrage-scanner em 2026-06-09: HTTP 200 sem bloqueio; projetos da frota
 não compartilham código — este arquivo adapta o padrão, não importa de lá).
 """
 from __future__ import annotations
 
+import datetime as _dt
 import gzip
 import html
 import os
@@ -36,12 +39,23 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
     "Accept-Encoding": "gzip",
 }
-CACHE_TTL_SECONDS = 24 * 3600
 REQUEST_GAP_SECONDS = 2.0   # educação com o site
 DEFAULT_CACHE_DIR = os.path.join("outputs", "pc_cache")
 MEDIAN_WINDOW = 10          # mediana das 10 vendas mais recentes
 
 _last_request_at = [0.0]
+_run_cache: dict = {}   # (cache_dir, url) -> (body, fetched_at ISO); vale só neste run
+
+
+def new_run() -> None:
+    """Começa um run novo: descarta todo cache (nenhuma página de outro scan é reusada)."""
+    _run_cache.clear()
+
+
+def page_fetched_at(url: str, cache_dir: str | None = None):
+    """ISO da busca da página neste run, ou None se não foi buscada por fetch_page."""
+    hit = _run_cache.get((cache_dir or DEFAULT_CACHE_DIR, url))
+    return hit[1] if hit else None
 
 
 _firecrawl_budget = [0]   # créditos Firecrawl liberados NESTE run (0 = rota paga desligada)
@@ -82,15 +96,13 @@ def _firecrawl_scrape(url: str) -> str:
 
 
 def fetch_page(url: str, cache_dir: str | None = None) -> str:
-    """Baixa uma página do PriceCharting com cache em disco (24h)."""
-    cache_dir = cache_dir or DEFAULT_CACHE_DIR
-    os.makedirs(cache_dir, exist_ok=True)
-    slug = re.sub(r"[^a-z0-9]+", "_", url.lower())[-120:]
-    cache_path = os.path.join(cache_dir, slug + ".html")
-    if os.path.exists(cache_path):
-        if time.time() - os.path.getmtime(cache_path) < CACHE_TTL_SECONDS:
-            with open(cache_path, encoding="utf-8") as f:
-                return f.read()
+    """Baixa uma página do PriceCharting; cache em memória válido só neste run.
+
+    `cache_dir` só nomeia o escopo do cache (nada é lido/escrito em disco: o
+    cache de 24h em disco reutilizava preço de outro scan)."""
+    key = (cache_dir or DEFAULT_CACHE_DIR, url)
+    if key in _run_cache:
+        return _run_cache[key][0]
 
     wait = REQUEST_GAP_SECONDS - (time.time() - _last_request_at[0])
     if wait > 0:
@@ -128,12 +140,7 @@ def fetch_page(url: str, cache_dir: str | None = None) -> str:
         # Também em FALHA: senão, durante throttling, cada retry sai sem gap
         # (a espera era calculada do último SUCESSO) e martela o site.
         _last_request_at[0] = time.time()
-    # Escrita atômica: processo morto no meio do write deixava um cache torto
-    # que seria re-servido por 24h ("—" falso, indistinguível de no-match).
-    tmp_path = cache_path + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        f.write(body)
-    os.replace(tmp_path, cache_path)
+    _run_cache[key] = (body, _dt.datetime.now().isoformat(timespec="seconds"))
     return body
 
 
@@ -319,7 +326,7 @@ def search_card_urls(query: str, cache_dir: str | None = None) -> list[str]:
 
 
 def resolve_pc_ref(card_name, number, set_label,
-                   cache_dir: str | None = None, variant=None) -> dict | None:
+                   cache_dir: str | None = None, variant=None, edition=None) -> dict | None:
     """Nome+número+set → {'median', 'n_sales', 'url'} ou None (nunca inventa).
 
     Busca "pokemon <set> <nome> <número>", escolhe o PRIMEIRO resultado cujo
@@ -331,7 +338,8 @@ def resolve_pc_ref(card_name, number, set_label,
     caso real 2026-08-29: Breloom EX Deoxys reverse (ref TCG $180) saía com a
     mediana da página holo BASE ($15), comparando variantes diferentes.
     """
-    path = _resolve_pc_path(card_name, number, set_label, cache_dir, variant)
+    path = _resolve_pc_path(card_name, number, set_label, cache_dir, variant,
+                            edition=edition)
     if not path:
         return None
     try:
@@ -344,8 +352,17 @@ def resolve_pc_ref(card_name, number, set_label,
     return {"median": median, "n_sales": n_sales, "url": BASE_URL + path}
 
 
+def edition_slug_ok(path: str, edition) -> bool:
+    """Edição da oferta × slug PC. '1st' só aceita `1st-edition`; 'unlimited' só
+    quem NÃO tem. edition=None → sem filtro (comportamento legado dos chamadores)."""
+    if edition is None:
+        return True
+    has_1st = "1st-edition" in path.rsplit("/", 1)[-1].lower()
+    return has_1st if str(edition).lower() == "1st" else not has_1st
+
+
 def _resolve_pc_path(card_name, number, set_label, cache_dir=None, variant=None,
-                     raise_errors: bool = False):
+                     raise_errors: bool = False, edition=None):
     """Busca a página PC da carta com as guardas (slug nome+número, console =
     set, reverse ↔ reverse). Nenhuma casa / erro → None."""
     set_name = _set_name_from_label(set_label)
@@ -357,7 +374,8 @@ def _resolve_pc_path(card_name, number, set_label, cache_dir=None, variant=None,
         paths = search_card_urls(query, cache_dir=cache_dir)
         matches = [p for p in paths
                    if slug_matches(p, card_name, number)
-                   and console_matches(p, set_label)]
+                   and console_matches(p, set_label)
+                   and edition_slug_ok(p, edition)]
         # Oferta reverse → SÓ página reverse (sem ela, None — nunca compara
         # variantes diferentes). Oferta não-reverse → só páginas sem 'reverse';
         # entre elas o slug mais CURTO = versão base ("mr-mime-95" vence
@@ -456,7 +474,7 @@ def ebay_median_reference(sales: list[dict], today=None) -> dict | None:
 
 
 def resolve_ebay_ref(card_name, number, set_label,
-                     cache_dir: str | None = None, variant=None) -> dict | None:
+                     cache_dir: str | None = None, variant=None, edition=None) -> dict | None:
     """Nome+número+set (+variante) → {'median','n_sales','oldest','newest','url'}
     das vendas eBay comparáveis da carta INGLESA, ou None. Mesma guarda de
     página do `resolve_pc_ref` (slug nome+número, console = set, reverse ↔ reverse)."""
@@ -465,7 +483,7 @@ def resolve_ebay_ref(card_name, number, set_label,
     # "sem venda eBay" (None). Confundir os dois esconde fonte quebrada.
     try:
         path = _resolve_pc_path(card_name, number, set_label, cache_dir, variant,
-                                raise_errors=True)
+                                raise_errors=True, edition=edition)
         if not path:
             return {"miss": "sem página PriceCharting casada"}
         page = fetch_page(BASE_URL + path, cache_dir=cache_dir)
@@ -479,3 +497,70 @@ def resolve_ebay_ref(card_name, number, set_label,
                 "url": BASE_URL + path}
     ref["url"] = BASE_URL + path
     return ref
+
+
+# ─── D5 (spec estrutural): sinal de demanda por vendas reais ungraded ────────
+# Mesma página que o --pc-refs já baixa: zero requisição extra. Sem dado → status
+# explícito, nunca zero presumido.
+DEMAND_WINDOWS_DAYS = (30, 90)
+
+
+def _demand_empty(status: str, url=None, motivo=None, fetched_at=None) -> dict:
+    return {"pc_url": url, "pc_status": status, "pc_motivo": motivo,
+            "pc_vendas_30d": None, "pc_vendas_90d": None, "pc_valor_90d_usd": None,
+            "pc_ultima_venda": None, "pc_truncado": None, "pc_buscado_em": fetched_at}
+
+
+def demand_signal(sales: list[dict], today=None, url=None, fetched_at=None) -> dict:
+    """Contagens 30/90d, valor 90d, última venda e `pc_truncado` (venda mais antiga
+    listada >= início da janela de 90d → a contagem é PISO). Sem vendas →
+    ZERO_VENDAS_LISTADAS com números None."""
+    today = today or _dt.date.today()
+    if not sales:
+        return _demand_empty("ZERO_VENDAS_LISTADAS", url, "tabela de vendas vazia", fetched_at)
+    cut30 = (today - _dt.timedelta(days=DEMAND_WINDOWS_DAYS[0])).isoformat()
+    cut90 = (today - _dt.timedelta(days=DEMAND_WINDOWS_DAYS[1])).isoformat()
+    in90 = [s for s in sales if s["date"] >= cut90]
+    return {"pc_url": url, "pc_status": "OK", "pc_motivo": None,
+            "pc_vendas_30d": sum(1 for s in sales if s["date"] >= cut30),
+            "pc_vendas_90d": len(in90),
+            "pc_valor_90d_usd": round(sum(s["price"] for s in in90), 2),
+            "pc_ultima_venda": max(s["date"] for s in sales),
+            "pc_truncado": min(s["date"] for s in sales) >= cut90,
+            "pc_buscado_em": fetched_at}
+
+
+def demand_from_page(body: str, url=None, today=None, fetched_at=None) -> dict:
+    """Parse da página já baixada. Sem a div `completed-auctions-used` →
+    ESTRUTURA_NAO_RECONHECIDA (o HTML mudou ≠ zero vendas)."""
+    if not re.search(r'<div class="completed-auctions-used"', body):
+        return _demand_empty("ESTRUTURA_NAO_RECONHECIDA", url,
+                             "div completed-auctions-used ausente", fetched_at)
+    return demand_signal(parse_sold_listings(body), today, url, fetched_at)
+
+
+def resolve_pc_demand(card_name, number, set_label, cache_dir: str | None = None,
+                      variant=None, edition=None, today=None) -> dict:
+    """Nome+número+set+edição → sinal de demanda da página PC COMPATÍVEL.
+
+    `edition`: '1st' | 'unlimited' (None = sem filtro de edição). Nunca usa a
+    página de outra edição; sem página → SEM_PAGINA_COMPATIVEL. 403 →
+    INDISPONIVEL_403; Firecrawl esgotado/falho → INDISPONIVEL_ORCAMENTO; outro
+    erro → INDISPONIVEL_REDE."""
+    url = None
+    try:
+        path = _resolve_pc_path(card_name, number, set_label, cache_dir, variant,
+                                raise_errors=True, edition=edition)
+        if not path:
+            return _demand_empty("SEM_PAGINA_COMPATIVEL", None,
+                                 f"nenhuma página PC casa nome+número+set+edição={edition}")
+        url = BASE_URL + path
+        page = fetch_page(url, cache_dir=cache_dir)
+    except urllib.error.HTTPError as e:
+        return _demand_empty("INDISPONIVEL_403" if e.code in (403, 429) else "INDISPONIVEL_REDE",
+                             url, f"HTTP {e.code}")
+    except RuntimeError as e:
+        return _demand_empty("INDISPONIVEL_ORCAMENTO", url, str(e)[:120])
+    except Exception as e:  # noqa: BLE001
+        return _demand_empty("INDISPONIVEL_REDE", url, f"{type(e).__name__}: {e}"[:120])
+    return demand_from_page(page, url, today, page_fetched_at(url, cache_dir))

@@ -1,0 +1,61 @@
+{
+ "_source": "pokemontcg.io, pre\u00e7os market registrados na spec-estrutural.md secao 0.2 (2026-11-24); chaves reais, so os campos usados",
+ "cards": {
+  "neo1-9": {
+   "rarity": "Rare Holo",
+   "prices": {
+    "1stEditionHolofoil": {
+     "market": 1300.0,
+     "low": 6100.0
+    },
+    "unlimitedHolofoil": {
+     "market": 534.65
+    }
+   }
+  },
+  "neo1-56": {
+   "rarity": "Common",
+   "prices": {
+    "1stEdition": {
+     "market": 16.46
+    },
+    "unlimited": {
+     "market": 1.62
+    }
+   }
+  },
+  "neo1-59": {
+   "rarity": "Common",
+   "prices": {
+    "1stEdition": {
+     "market": 1.93
+    },
+    "unlimited": {
+     "market": 0.81
+    }
+   }
+  },
+  "ex12-56": {
+   "rarity": "Common",
+   "prices": {
+    "normal": {
+     "market": 0.55
+    },
+    "reverseHolofoil": {
+     "market": 37.5
+    }
+   }
+  },
+  "ecard3-118": {
+   "rarity": "Common",
+   "prices": {
+    "normal": {
+     "market": 33.47
+    },
+    "reverseHolofoil": {
+     "market": 104.99
+    }
+   }
+  }
+ }
+}
