@@ -3959,7 +3959,9 @@ class Scanner:
         elif nr_left and (priced_total > 0 or abort_kind in ("operational", "breaker")):
             # B1b: o set NÃO foi avaliado por inteiro — não é "completo": tentar de novo
             status, reason = "operational_failure", f"coverage_interrupted_{len(nr_left)}_not_reached"
-        elif priced_total == 0:
+        elif priced_total == 0 and not any(r.get("set") == exp_code for r in self.__dict__.get("noref_rows", [])):
+            # B1m: oferta SEM referência por incompatibilidade/ambiguidade = a fonte TEM a carta; isso não é
+            # "ausência de cobertura" (e não pode ir para a skip-list): cai em complete_with_unpriced abaixo.
             status = "no_coverage"
             reason = abort_reason or f"{len(left)}_of_{total}_without_reference"
         else:

@@ -146,3 +146,24 @@ def test_end_to_end_invalid_live_price_stays_visible_as_revisar_not_sem_ref(tmp_
     df = pp.enrich_df(raw)
     d, why = pp.classify_decision(df.iloc[0], pp.DecisionConfig())
     assert d == "REVISAR" and "preço não validado" in why
+
+
+# ───────── set com oferta SEM referência por incompatibilidade/ambiguidade (a fonte TEM a carta) ≠ no_coverage ─────────
+def test_set_with_a_noref_offer_and_a_miss_is_not_no_coverage_and_not_skip_listed(monkeypatch):
+    from test_b1e import EXP
+    from test_b1f import _tcgcsv_primary
+    calls = []
+    monkeypatch.setattr(sc, "add_to_skip_list", lambda *a, **k: calls.append((a, k)))
+    s = _tcgcsv_primary([(1, "Normal", 3.0)], n=2, alt=None)      # oferta 1: só Normal vs Holo = incompatível; oferta 2: sem linha = miss
+    assert list(s.scan_expansion(EXP)) == []
+    assert len(s.noref_rows) == 1 and s._set_unpriced == 1, (len(s.noref_rows), s._set_unpriced)
+    assert s._set_status == "complete_with_unpriced", (s._set_status, s._set_reason)
+    assert calls == []                                            # nada de skip-list: a fonte TEM a carta
+
+
+def test_set_with_only_misses_is_still_no_coverage(monkeypatch):
+    from test_b1e import EXP
+    from test_b1f import _tcgcsv_primary
+    s = _tcgcsv_primary([], n=2, alt=None)                        # a fonte não tem NENHUMA das cartas
+    assert list(s.scan_expansion(EXP)) == []
+    assert s._set_status == "no_coverage"
