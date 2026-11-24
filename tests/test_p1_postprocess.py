@@ -214,7 +214,8 @@ def test_cinco_linhas_mesma_referencia_uma_consulta():
                       page_fetcher=lambda url, cache_dir=None: "<html></html>")
     assert calls == [("Lugia", "unl")]
     assert (df["pc_vendas_90d"] == 7).all()
-    assert df.attrs["pc_stats"] == {"consultas_unicas": 1, "linhas_atendidas": 5}
+    assert df.attrs["pc_stats"] == {"consultas_unicas": 1, "linhas_atendidas": 5,
+                                    "sem_consulta_limite_refs": 0, "sem_consulta_limite_linhas": 0}
 
 
 def test_edicao_ausente_nao_consulta_e_marca():

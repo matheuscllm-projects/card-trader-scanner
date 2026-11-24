@@ -61,12 +61,14 @@ from __future__ import annotations
 
 from chat_format import reference_price
 import argparse, os, re, sys
+import ct_variants
 import pricecharting_ref
 from ct_chase import classify_chase_tier  # unico dono do chase (informativo)
 from ct_economics import BASES_COMPRA, BASES_VENDA, Costs, compute as compute_economics
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import numpy as np
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -234,8 +236,20 @@ def _num(v):
 
 
 def _is_reverse_offer(row) -> bool:
-    return ("reverse" in str(row.get("variant") or "").lower()
-            or str(row.get("acabamento") or "").strip().lower() == "reverse")
+    """Unica fonte da decisao: pricecharting_ref.finish_status (variante OU acabamento)."""
+    return any(pricecharting_ref.finish_status(row.get(k)) == pricecharting_ref.FINISH_REVERSE_NAO_CONFIRMAVEL
+               for k in ("variant", "acabamento"))
+
+
+def _truncado(v):
+    """True | False | None (desconhecido: NA/NaN/None/'desconhecido'/qualquer nao-bool)."""
+    return bool(v) if isinstance(v, (bool, np.bool_)) else None
+
+
+_PC_STATUS_TEXT = {
+    "EDICAO_NAO_INFORMADA": "edição não informada",
+    "LIMITE_CONSULTAS": "limite de consultas PriceCharting (--pc-refs) esgotado antes desta referência",
+}
 
 
 def liquidity_verdict(row, cfg: DecisionConfig):
@@ -245,7 +259,10 @@ def liquidity_verdict(row, cfg: DecisionConfig):
     oferta reverse nunca conta como verificada (lacuna do modulo, relatada no PR)."""
     st = str(row.get("pc_status") or "NAO_CONSULTADO")
     if st != "OK":
-        why = {"EDICAO_NAO_INFORMADA": "edição não informada"}.get(st, st)
+        why = _PC_STATUS_TEXT.get(st, st)
+        mot = row.get("pc_motivo")
+        if st in _PC_STATUS_TEXT and isinstance(mot, str) and mot.strip():
+            why += f" ({mot.strip()})"
         return False, f"liquidez não verificada: {why}"
     if _is_reverse_offer(row):
         return False, ("liquidez não verificada: acabamento reverse não confirmável "
@@ -253,24 +270,31 @@ def liquidity_verdict(row, cfg: DecisionConfig):
     v90, v30 = _num(row.get("pc_vendas_90d")), _num(row.get("pc_vendas_30d"))
     if v90 is None or v30 is None:
         return False, "liquidez não verificada: contagens ausentes"
-    piso = bool(row.get("pc_truncado")) and row.get("pc_truncado") is not pd.NA
+    trunc = _truncado(row.get("pc_truncado"))   # None = desconhecido (nunca presumido exato)
+    piso = trunc is not False
     n90, n30 = int(v90), int(v30)
     pre = "≥" if piso else ""
     if n90 < cfg.min_sales_90d or n30 < cfg.min_sales_30d:
+        if trunc is None:
+            return False, (f"liquidez não verificada: truncamento desconhecido, pelo menos {n90} "
+                           f"vendas/90d e {n30}/30d (mínimo {cfg.min_sales_90d}/90d e "
+                           f"{cfg.min_sales_30d}/30d)")
         if piso:
             return False, (f"liquidez não verificada: contagem truncada, pelo menos {n90} "
                            f"vendas/90d e {n30}/30d (mínimo {cfg.min_sales_90d}/90d e "
                            f"{cfg.min_sales_30d}/30d)")
         return False, (f"liquidez baixa: {n90} vendas/90d e {n30}/30d "
                        f"(mínimo {cfg.min_sales_90d}/90d e {cfg.min_sales_30d}/30d)")
-    return True, f"liquidez {pre}{n90} vendas/90d, {pre}{n30}/30d"
+    return True, (f"liquidez {pre}{n90} vendas/90d, {pre}{n30}/30d"
+                  + (" (truncamento desconhecido)" if trunc is None else ""))
 
 
 def classify_decision(row, cfg: DecisionConfig, check_liquidity: bool = True):
     """Aplica regra mecanica. Retorna (decisao, porque). O chase NAO participa.
     `check_liquidity=False` so serve p/ escolher quais linhas consultar no PriceCharting."""
-    if str(row.get("decisao_forcada") or "") == "SEM REF":
-        return "SEM REF", str(row.get("motivo") or "sem referência compatível")
+    sm = row.get("sem_margem_motivo")   # compute devolveu "sem margem": nunca herda numero do XLSX
+    if isinstance(sm, str) and sm.strip():
+        return "SEM REF", sm.strip()
     nm = row.get("net_margin", 0)
     profit = row.get("lucro_liq", 0)
     val = str(row.get("validation_status", "")).upper()
@@ -309,6 +333,9 @@ def classify_decision(row, cfg: DecisionConfig, check_liquidity: bool = True):
         return "REVISAR", f"Markup anomalo (>45%); margem {nm:.0%}"
     if val not in ("VALIDATED_REAL", "VALIDATED_MARKUP"):
         return "REVISAR", f"Validation {val or 'ausente'}; margem {nm:.0%} (preço sem checkout real)"
+    if not _is_truthy_flag(row.get("compra_inclui_hub")):   # VALIDATED sem LIVE na linha = sem preço de checkout
+        return "REVISAR", (f"Validation {val} mas sem preço de checkout (LIVE ausente ou não "
+                           f"finito); margem {nm:.0%} sobre preço cru do scan")
     if _is_truthy_flag(row.get("variant_low_confidence")):
         return ("REVISAR",
                 "Variante Baixa Confiança — preço de referência casou numa variante "
@@ -500,14 +527,16 @@ def _recompute_margin_with_fee(df: pd.DataFrame, costs: Costs | None = None,
 
     `compra_inclui_hub` (coluna, True/False por linha) decide se o Hub e aplicado: o preco
     de checkout (LIVE R$ real) ja embute o Hub; o preco cru do scan (Scan R$ raw) nao.
-    Sem live_brl/ref validos a linha mantem o net_margin do input (marcado "input") ou
-    cai em "Dados insuficientes" na decisao — nunca inventa.
+    Sem live_brl/ref validos a linha fica SEM margem e SEM lucro (NaN) com o motivo do
+    compute em `sem_margem_motivo` → decisao "SEM REF"; nunca herda numero do input.
     """
     costs = costs if costs is not None else Costs()
     n = len(df)
     df["margin_source"] = "input"
-    if "live_brl" not in df.columns or "reference_price_brl" not in df.columns:
-        return df
+    df["sem_margem_motivo"] = None
+    for c in ("live_brl", "reference_price_brl"):
+        if c not in df.columns:
+            df[c] = float("nan")   # coluna ausente = dado ausente: compute devolve o motivo
     if "compra_inclui_hub" not in df.columns:
         df["compra_inclui_hub"] = False
     for c in ("roi_aquisicao", "lucro_liquido_parcial", "margem_liquida_parcial",
@@ -525,12 +554,16 @@ def _recompute_margin_with_fee(df: pd.DataFrame, costs: Costs | None = None,
     n_drift, max_drift = 0, 0.0
     cols = {c: df[c].tolist() for c in ("net_margin", "lucro_liq", "roi_aquisicao",
             "lucro_liquido_parcial", "margem_liquida_parcial", "roi_liquido_parcial",
-            "liquida_status", "margin_source")}
+            "liquida_status", "margin_source", "sem_margem_motivo")}
     hub = df["compra_inclui_hub"].astype(bool).tolist()
     for pos in range(n):
         eco = compute_economics(ref.iat[pos], live.iat[pos], compra_inclui_hub=hub[pos],
                                 costs=costs)
         if not eco.tem_margem:
+            # Sem margem calculavel: a linha NAO herda margem/lucro do XLSX (dado nao presumido).
+            cols["net_margin"][pos] = cols["lucro_liq"][pos] = float("nan")
+            cols["margin_source"][pos] = "sem_margem"
+            cols["sem_margem_motivo"][pos] = eco.sem_margem_motivo
             continue
         old = cols["net_margin"][pos]
         drift = abs(old - eco.margem_venda) / max(1.0, abs(eco.margem_venda)) if pd.notna(old) else 0.0  # relativo: margens negativas gigantes vem arredondadas do scanner
@@ -795,12 +828,14 @@ def build_tcg_suspect_sheet(all_listings: pd.DataFrame) -> pd.DataFrame:
 def bucket_counts(df: pd.DataFrame, cfg: DecisionConfig, extra_blocks: dict | None = None) -> dict:
     """Contabilidade unica: cada linha de entrada cai em EXATAMENTE um balde.
     COMPRA+REVISAR = tabela comercial; NAO = abaixo do corte/rejeitada; AUDITORIA = margem
-    negativa; extras = abas 'Sem preço'/'Sem Ref Compatível' (sem margem). Soma == entrada."""
+    negativa; SEM_REF = compute nao deu margem (bloco proprio); extras = abas 'Sem preço'/
+    'Sem Ref Compatível' (sem margem). Soma == entrada."""
     if "decisao" in df.columns:
         dec = df["decisao"]
     else:
         dec = df.apply(lambda r: classify_decision(r, cfg)[0], axis=1) if len(df) else pd.Series([], dtype=str)
     out = {k: int((dec == k).sum()) for k in ("COMPRA", "REVISAR", "NAO", "AUDITORIA")}
+    out["SEM_REF"] = int((dec == "SEM REF").sum())   # sem margem calculavel (compra/referencia invalida)
     out["EXTRAS"] = {k: len(v) for k, v in (extra_blocks or {}).items()}
     out["ENTRADA"] = len(df) + sum(out["EXTRAS"].values())
     return out
@@ -820,6 +855,7 @@ def build_summary(df: pd.DataFrame, cfg: DecisionConfig, extra_blocks: dict | No
         ("REVISAR (zona cinza / liquidez não verificada)", pct(c["REVISAR"])),
         ("NÃO", pct(c["NAO"])),
         ("AUDITORIA (margem negativa — fora da tabela)", pct(c["AUDITORIA"])),
+        ("SEM REFERÊNCIA (sem margem calculável — bloco à parte)", pct(c["SEM_REF"])),
         *[(f"Bloco extra: {n}", q) for n, q in c["EXTRAS"].items()],
         ("Lucro bruto potencial (COMPRA)", f"R$ {lucro_compra:,.0f}"),
         ("", ""),
@@ -1077,15 +1113,27 @@ def _fmt_dh(v) -> str:
 PC_DIVERGENCE_RATIO = 0.30
 
 
+# Vocabulario de edicao: SO o de ct_variants (codigos ED_1ST/ED_UNL e os rotulos de _ED_LABEL,
+# ex. "1st Edition"/"Unlimited"). Nao ha segunda copia nem lista de sets com 1st Edition aqui:
+# quem sabe se o set tem divisao de edicao e o scanner, que emite a coluna `Edição`.
+_ED_VOCAB = {**{lbl.lower(): k for k, lbl in ct_variants._ED_LABEL.items() if k != ct_variants.ED_NONE},
+             ct_variants.ED_1ST: ct_variants.ED_1ST, ct_variants.ED_UNL: ct_variants.ED_UNL}
+
+
 def _row_edition(row):
-    """'1st' | 'unl' | None. Coluna `Edição` ausente (XLSX antigo) → None = NAO informada
-    (nunca presume Unlimited). Coluna presente: '1st Edition' → '1st'; 'Unlimited' ou
-    vazio (carta sem divisao de edicao, D1.8) → 'unl' (slug PC sem '1st-edition')."""
+    """(edicao, motivo): edicao = ED_1ST | ED_UNL | None (None = NAO informada, com motivo).
+    Coluna `Edição` ausente (XLSX antigo), vazia/NaN ou fora do vocabulario → None: nunca
+    presume Unlimited. Valor fora do vocabulario traz o texto original no motivo."""
     if "edicao" not in row.index:
-        return None
+        return None, "coluna 'Edição' ausente no XLSX (scanner antigo)"
     v = row.get("edicao")
-    t = "" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v).strip().lower()
-    return "1st" if t.startswith("1st") else "unl"
+    t = "" if v is None or (isinstance(v, float) and pd.isna(v)) else str(v).strip()
+    if not t:
+        return None, "coluna 'Edição' vazia nesta linha"
+    ed = _ED_VOCAB.get(t.lower())
+    if ed is None:
+        return None, f"valor de 'Edição' fora do vocabulário do scanner: {t!r}"
+    return ed, None
 
 
 def _pc_key(row, edition):
@@ -1122,10 +1170,11 @@ def attach_pc_refs(df: pd.DataFrame, cfg: DecisionConfig, top_md: int,
     df["pc_status"] = "NAO_CONSULTADO"
     keys, editions = {}, {}
     for idx, row in df.iterrows():
-        ed = _row_edition(row)
+        ed, ed_motivo = _row_edition(row)
         editions[idx] = ed
         if ed is None:
             df.at[idx, "pc_status"] = "EDICAO_NAO_INFORMADA"
+            df.at[idx, "pc_motivo"] = ed_motivo
         elif _is_reverse_offer(row):
             df.at[idx, "pc_status"] = pricecharting_ref.FINISH_REVERSE_NAO_CONFIRMAVEL
         else:
@@ -1138,7 +1187,15 @@ def attach_pc_refs(df: pd.DataFrame, cfg: DecisionConfig, top_md: int,
         if keys[i] not in order:
             order.append(keys[i])
     ok = served = 0
-    for key in order[:max(0, int(limit))]:
+    lim = max(0, int(limit))
+    cortadas = set(order[lim:])   # referencias cobertas pelo criterio mas sem orcamento de consulta
+    n_lim_linhas = 0
+    for idx in keys:
+        if keys[idx] in cortadas and idx in cand:
+            df.at[idx, "pc_status"] = "LIMITE_CONSULTAS"
+            df.at[idx, "pc_motivo"] = f"limite --pc-refs {lim} esgotado ({len(order)} referências únicas)"
+            n_lim_linhas += 1
+    for key in order[:lim]:
         rep = next(i for i in cand if keys[i] == key)
         row = df.loc[rep]
         try:
@@ -1162,8 +1219,10 @@ def attach_pc_refs(df: pd.DataFrame, cfg: DecisionConfig, top_md: int,
             if med:
                 df.at[idx, "pc_median_usd"] = float(med)
                 df.at[idx, "pc_n_sales"] = n_med
-    df.attrs["pc_stats"] = {"consultas_unicas": min(len(order), max(0, int(limit))),
-                            "linhas_atendidas": served}
+    df.attrs["pc_stats"] = {"consultas_unicas": min(len(order), lim),
+                            "linhas_atendidas": served,
+                            "sem_consulta_limite_refs": len(cortadas),
+                            "sem_consulta_limite_linhas": n_lim_linhas}
     return ok, df.attrs["pc_stats"]["consultas_unicas"]
 
 
@@ -1273,6 +1332,20 @@ def _extra_blocks_markdown(extra_blocks) -> str:
     return "\n".join(out)
 
 
+def _sem_ref_frame(work: pd.DataFrame) -> pd.DataFrame:
+    """Linhas SEM REF no formato dos blocos extras: sem margem, motivo do compute, links."""
+    d = work[work["decisao"] == "SEM REF"]
+    g = lambda c: d[c] if c in d.columns else None  # noqa: E731
+    return pd.DataFrame({"Card Name": g("card_name"), "Nº": g("card_number"), "Set": g("set_code"),
+                         "Qtd": g("quantity"), "Edição": g("edicao"), "Acabamento": g("acabamento"),
+                         "Motivo": d["porque"], "Link CardTrader": g("link_ct"), "Link TCG": g("link_tcg")})
+
+
+def _sem_ref_markdown(work: pd.DataFrame) -> str:
+    blk = _sem_ref_frame(work)
+    return _extra_blocks_markdown({"Sem referência (margem não calculável)": blk}) if len(blk) else ""
+
+
 def build_delivery_markdown(
     df: pd.DataFrame,
     cfg: DecisionConfig,
@@ -1364,7 +1437,9 @@ def build_delivery_markdown(
         # COMPRA/REVISAR. Pra um screen de RAZÃO, uma comum 6× mais barata (que a
         # regra mecânica marcaria NÃO por ser BULK) é exatamente o que se pediu;
         # a decisão aparece na coluna Flag, nunca esconde a linha.
-        deals = work.copy()   # screen de RAZAO: corre sobre todas (margem nao e o criterio)
+        # screen de RAZAO: corre sobre todas as precificadas (margem nao e o criterio), MAS margem
+        # negativa (AUDITORIA) e sem-referencia (SEM REF) nunca entram na tabela comercial.
+        deals = work[~work["decisao"].isin(["AUDITORIA", "SEM REF"])].copy()
         if "net_margin" in deals.columns:
             deals = deals.sort_values("net_margin", ascending=False)
         near_miss = False
@@ -1403,7 +1478,8 @@ def build_delivery_markdown(
     foot = [
         f"_Entrada: {counts['ENTRADA']} linha(s) = {counts['COMPRA']} COMPRA + "
         f"{counts['REVISAR']} REVISAR + {counts['NAO']} abaixo do corte/rejeitadas + "
-        f"{counts['AUDITORIA']} margem negativa"
+        f"{counts['AUDITORIA']} margem negativa + {counts['SEM_REF']} sem referência/compra "
+        "(sem margem)"
         + "".join(f" + {q} {n}" for n, q in counts["EXTRAS"].items()) + "._",
         f"_{counts['AUDITORIA']} oportunidade(s) com margem negativa enviada(s) para a aba "
         "Auditoria do XLSX (fora desta tabela)._",
@@ -1419,7 +1495,12 @@ def build_delivery_markdown(
             f"{pc_summary.get('linhas_atendidas', 0)} linha(s) atendida(s); "
             f"{pc_summary.get('firecrawl_creditos_gastos', 0)} crédito(s) Firecrawl de "
             f"{pc_summary.get('firecrawl_teto', 0)} liberados._")
-    extra_md = _extra_blocks_markdown(extra_blocks)
+        if pc_summary.get("sem_consulta_limite_refs"):
+            foot.append(
+                f"_PriceCharting: {pc_summary['sem_consulta_limite_refs']} referência(s) sem consulta "
+                f"por limite ({pc_summary.get('sem_consulta_limite_linhas', 0)} linha(s)) — limite "
+                "--pc-refs esgotado; ficam REVISAR com status LIMITE_CONSULTAS (não é falha da fonte)._")
+    extra_md = _extra_blocks_markdown(extra_blocks) + _sem_ref_markdown(work)
     if ratio_cut_applied:
         title += f" · corte razão ≥ {float(min_ratio):.1f}× (sobre todas as linhas precificadas)"
         if min_ref_usd is not None:
@@ -1746,6 +1827,7 @@ def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path,
     _write_styled("Validate Manually", build_validate_manually_sheet(all_l))
     _write_styled("TCG Suspect", build_tcg_suspect_sheet(all_l))
     _write_styled("Auditoria", build_auditoria_sheet(df, cfg))   # margem negativa
+    _write_styled("Sem referência", _sheet_frame(df[df["decisao"] == "SEM REF"]))   # sem margem calculavel
     for _name, _ex in extra_blocks.items():   # linhas sem margem: nao somem
         _write_styled(_name, _ex)
 
