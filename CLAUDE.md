@@ -492,6 +492,8 @@ muitas cartas) precisam de bem mais que 8 minutos. Elas estouravam o tempo
 
 - `df` (EX Dragon Frontiers) — **20 min**;
 - `ds` / `n1` / `n4` — **18 min**;
+- `cg` / `g1` / `g2` / `tr` / `hp` / `aq` — **18 min** (adicionados no Lote 1 de resiliência,
+  2026-11: estouravam os 8 min no run de 2026-06-27);
 - `cri` (Chaos Rising, era Mega Evolution / me4 — adicionado no #47) —
   **20 min**: a pokemontcg.io não precifica o set, então ele cai no fallback
   tcgcsv per-listing, que é lento.

@@ -655,12 +655,21 @@ CT_JP_SETCODE_COLLISIONS: dict[str, str] = {
 }
 
 
+# Lote 2 (#13): códigos CT cujo texto é, por coincidência, o id de OUTRO set na
+# pokemontcg.io. Conferido em sets/en.json de PokemonTCG/pokemon-tcg-data
+# (2026-11-24): {"id": "g1", "name": "Generations"}; Gym Heroes = "gym1". Nunca
+# resolvem por identidade (só pelo alias explícito).
+CT_PTCG_ID_COLLISIONS: dict[str, str] = {
+    "g1": "Gym Heroes (CT) ≠ Generations (ptcg g1)",
+}
+
+
 def ptcg_expected_sets(ct_set_code: str) -> set[str]:
     """setcodes pokemontcg.io aceitos pra um código CT: o próprio código (exceto
     colisão JP) + aliases de SET_ALIAS_TO_PTCG."""
     code = (ct_set_code or "").lower()
     out: set[str] = set()
-    if code and code not in CT_JP_SETCODE_COLLISIONS:
+    if code and code not in CT_JP_SETCODE_COLLISIONS and code not in CT_PTCG_ID_COLLISIONS:
         out.add(code)
     for alias in PokemonTcgIoProvider.SET_ALIAS_TO_PTCG.get(code, []):
         out.add(alias.lower())
@@ -950,6 +959,22 @@ def compute_valorization(rarity: Optional[str],
     score = rarity_pts + age_pts + price_pts
     note = f"{rarity_note}; {age_note}; {price_note} (heurística — sem série histórica)"
     return score, note
+
+
+_CT_DELTA_SUFFIX = re.compile(r"\s+Delta Species$")
+
+
+def ptcg_card_name(ct_name: str) -> str:
+    """Nome CT → nome usado pela pokemontcg.io (Lote 2, #1).
+
+    Conferido em cards/en/ex15|ex11|ex14.json (PokemonTCG/pokemon-tcg-data):
+    CT "Ampharos δ Delta Species" = ptcg "Ampharos δ"; CT "Charizard ☆ Gold Star
+    δ Delta Species" = ptcg "Charizard ★ δ"; CT "Groudon ☆ Gold Star" = ptcg
+    "Groudon ★". Nome sem esses padrões passa intacto."""
+    name = ct_name or ""
+    if "δ" in name:
+        name = _CT_DELTA_SUFFIX.sub("", name)
+    return name.replace("☆ Gold Star", "★")
 
 
 def clean_collector_number(raw: str) -> str:
@@ -1789,7 +1814,7 @@ class PokemonTcgIoProvider(PricingProvider):
         "mt":    ["dp2"],         # Mysterious Treasures
         "sw":    ["dp3"],         # Secret Wonders
         "ge":    ["dp4"],         # Great Encounters
-        "wcd2010": ["dp6"],       # World Championship Deck 2010 — Legends Awakened
+        # (removido no Lote 2: dp6 = Legends Awakened, não WCD 2010 — sets/en.json)
         "sft":   ["dp7"],         # Stormfront
         # Platinum
         "pl":    ["pl1"],         # Platinum base
@@ -1902,8 +1927,11 @@ class PokemonTcgIoProvider(PricingProvider):
         sets perdem cobertura (ex pupr→sm5 = Lusamine Promos Ultra Prism);
         compensado por UNSUPPORTED_SETS no postprocess (Layer 3).
         """
-        num_clean = clean_collector_number(number)
-        safe_name = card_name.replace('"', '\\"')
+        # Lote 2 (#2): chave que PRESERVA letra/prefixo (H1 ≠ 1; 50A ≠ 50) — a
+        # mesma do caminho tcgcsv. O digits-only antigo casava H1 com a carta #1
+        # (ex.: Aquapolis: Ampharos "1" e "H1" existem em ecard2.json).
+        num_clean = tcgcsv_collector_key(number)
+        safe_name = ptcg_card_name(card_name).replace('"', '\\"')
         base_q = f'name:"{safe_name}"'
         if num_clean:
             base_q += f" number:{num_clean}"
@@ -3682,7 +3710,8 @@ class Scanner:
         code = (ct_set_code or "").lower()
         # v2.29: código CT de set JP que colide com setcode pokemontcg.io não
         # entra por identidade (ver CT_JP_SETCODE_COLLISIONS).
-        out = [code] if code and code not in CT_JP_SETCODE_COLLISIONS else []
+        out = ([code] if code and code not in CT_JP_SETCODE_COLLISIONS
+               and code not in CT_PTCG_ID_COLLISIONS else [])
         for alias in PokemonTcgIoProvider.SET_ALIAS_TO_PTCG.get(code, []):
             if alias.lower() not in out:
                 out.append(alias.lower())
