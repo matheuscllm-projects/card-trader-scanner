@@ -4032,8 +4032,12 @@ class Scanner:
             lines.append(f"{n} listings sem preço — ver aba 'Sem preço' do XLSX")
         return lines
 
-    def validate_per_blueprint(self, opps: list[Opportunity], top_n: int = 30) -> None:
-        """Fase 3 / v2.0 — Valida top N candidatos via endpoint per-blueprint.
+    def validate_per_blueprint(self, opps: list[Opportunity],
+                               top_n: Optional[int] = None) -> None:
+        """Fase 3 / v2.0 — Valida candidatos via endpoint per-blueprint.
+
+        Lote 3: `top_n=None` (padrão e canônico) valida TODAS as oportunidades
+        elegíveis; um inteiro limita aos N de maior margem bruta (quem quiser).
 
         A API CT retorna preços diferentes nos endpoints per-expansion (RAW do
         seller, sem markup) e per-blueprint (preço FINAL com markup CT embutido,
@@ -4055,7 +4059,7 @@ class Scanner:
             return
         # Top N por margem bruta (a mesma ordem do scan default)
         sorted_opps = sorted(opps, key=lambda o: o.margin_pct, reverse=True)
-        candidates = sorted_opps[:top_n]
+        candidates = sorted_opps if top_n is None else sorted_opps[:top_n]
         unique_bp_ids = {o.listing.blueprint_id for o in candidates}
         log.info(f"v2.0: validando top {len(candidates)} candidatos ({len(unique_bp_ids)} blueprints únicos) per-blueprint...")
 
@@ -4177,6 +4181,36 @@ class Scanner:
 #   - Aba "Stats": métricas da execução (funnel de filtragem)
 # Formatação condicional: margem >= 40% fica verde forte, <30% vermelho.
 # ══════════════════════════════════════════════════════════════════════
+def apply_validation_filters(opps: list[Opportunity], min_net_margin: float):
+    """Lote 3 (D): aplica --min-net-margin SÓ a linhas VALIDADAS. Linha que não
+    pôde ser validada (STALE, API_ERROR, PRICE_CHANGED, NOT_VALIDATED por limite
+    de --validate-top) continua na saída com o status real — nada some por
+    causa de falha operacional. O que o operador cortou explicitamente com
+    --min-net-margin é devolvido em `dropped` e logado (não é descarte mudo).
+    Retorna (mantidas, descartadas_por_min_net)."""
+    validated = ("VALIDATED_REAL", "VALIDATED_MARKUP")
+    kept: list[Opportunity] = []
+    dropped: list[Opportunity] = []
+    for o in opps:
+        if (min_net_margin > 0 and o.validation_status in validated
+                and (o.real_net_margin_pct or 0) < min_net_margin):
+            dropped.append(o)
+        else:
+            kept.append(o)
+    by_status: dict[str, int] = {}
+    for o in kept:
+        by_status[o.validation_status] = by_status.get(o.validation_status, 0) + 1
+    log.info(f"Validação: {len(kept)} oportunidades mantidas por status: {by_status}")
+    if dropped:
+        names = "; ".join(
+            f"{o.listing.card_name} ({o.listing.set_code} {o.listing.collector_number}) "
+            f"net real {(o.real_net_margin_pct or 0):.0%}" for o in dropped)
+        log.info(
+            f"Filtro --min-net-margin {min_net_margin:.0%}: {len(dropped)} oportunidade(s) "
+            f"validada(s) abaixo do corte, removidas por pedido do operador: {names}")
+    return kept, dropped
+
+
 def export_xlsx(opportunities: list[Opportunity], stats: dict,
                 out_path: Path, usd_brl: float, eur_brl: float,
                 threshold: float, hub_fee_rate: float = 0.0,
@@ -4454,8 +4488,10 @@ def parse_args():
                    help="Limpa caches voláteis (preços TCG + FX) antes de rodar — força refresh em janelas de arbitragem urgente")
     p.add_argument("--max-expansions", type=int, default=None,
                    help="Limita o número de expansões (teste rápido)")
-    p.add_argument("--validate-top", type=int, default=0,
-                   help="v2.0: valida os top N candidatos via per-blueprint (preço REAL com markup CT). 0 = desativado. Recomendado: 30")
+    p.add_argument("--validate-top", type=int, default=None,
+                   help=("v2.0 / Lote 3: valida via per-blueprint (preço REAL com markup CT). "
+                         "PADRÃO (omitido) = TODAS as oportunidades elegíveis. "
+                         "N = só as N de maior margem bruta; 0 = desativa a validação."))
     p.add_argument("--min-net-margin", type=float, default=0.0,
                    help="v2.0: filtra apenas oportunidades com margem liq REAL >= X apos validacao. Ex: 0.20 = so 20%% liq+")
     p.add_argument("--shipping-brl", type=float, default=0.0,
@@ -4891,32 +4927,18 @@ def main():
     near_misses = [o for o in opps if o.below_threshold] if scanner.keep_all_priced else []
     opps = [o for o in opps if not o.below_threshold] if scanner.keep_all_priced else opps
 
-    # v2.0 — validação per-blueprint dos top N (só sobre as OPORTUNIDADES)
-    if args.validate_top > 0 and opps:
+    # v2.0 — validação per-blueprint (Lote 3: de TODAS as oportunidades por
+    # padrão; --validate-top N limita; 0 desliga). Só sobre as OPORTUNIDADES.
+    if args.validate_top != 0 and opps:
         t1 = time.time()
         scanner.validate_per_blueprint(opps, top_n=args.validate_top)
         log.info(f"Validação per-blueprint completa em {time.time()-t1:.1f}s")
 
-        # M1 fix (2026-05-11): sempre filtra status inválidos (STALE, API_ERROR,
-        # PRICE_CHANGED) quando há validação, independente do min_net_margin.
-        # Antes só rodava quando min_net_margin > 0, deixando lixo no XLSX.
-        before_status = len(opps)
-        opps = [
-            o for o in opps
-            if o.validation_status in ("VALIDATED_REAL", "VALIDATED_MARKUP")
-        ]
-        dropped = before_status - len(opps)
-        if dropped > 0:
-            log.info(f"Filtro de status (STALE/API_ERROR/PRICE_CHANGED): {before_status} → {len(opps)} oportunidades")
-
-        # Filtro adicional por margem líq REAL (só se min_net_margin > 0)
-        if args.min_net_margin > 0:
-            before = len(opps)
-            opps = [
-                o for o in opps
-                if (o.real_net_margin_pct or 0) >= args.min_net_margin
-            ]
-            log.info(f"Filtro --min-net-margin {args.min_net_margin:.0%}: {before} → {len(opps)} oportunidades")
+        # Linhas não validadas (erro de API, STALE...) ficam com o status real;
+        # só o corte --min-net-margin (explícito) remove, e é logado.
+        before = len(opps)
+        opps, cut = apply_validation_filters(opps, args.min_net_margin)
+        scanner.stats["opps_descartadas_min_net"] = len(cut)
 
         # M2 fix (2026-05-11): sempre re-ordena por margem líq REAL desc
         # quando houve validação, não só quando min_net_margin > 0.
@@ -4980,7 +5002,7 @@ def main():
     print("═" * 60)
 
     if opps_by_net:
-        validated_label = " (validadas v2.0)" if args.validate_top > 0 else ""
+        validated_label = " (validadas v2.0)" if args.validate_top != 0 else ""
         print(f"\n  TOP 5 OPORTUNIDADES{validated_label}:\n")
         for i, o in enumerate(opps_by_net[:5], 1):
             l = o.listing

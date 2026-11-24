@@ -118,8 +118,10 @@ margem = (preço de referência TCG − preço no site) ÷ preço TCG
 > (*per-expansion*, agregado por coleção); a conferência (`--validate-top`)
 > refaz com o preço **real de checkout** (*per-blueprint*, por carta exata).
 > **Sempre conferir** — sem isso, no passado **~76% dos "achados" eram falsos**.
-> ⚠️ O default de `--validate-top` é **0** (omitir = NENHUMA validação): sempre
-> passe o valor canônico `--validate-top 30`.
+> Desde o Lote 3 (2026-11) o padrão de `--validate-top` é **validar TODAS** as
+> oportunidades elegíveis (omitir a flag = todas); `--validate-top N` limita às N
+> de maior margem e `--validate-top 0` desliga a validação. Linha que não pôde
+> ser validada (erro de API, STALE) **continua na saída com o status real**.
 >
 > A opção `--hub-fee` continua existindo nos dois scripts e tem **default 0.0**
 > (margem bruta). Se um dia quiser reembutir os 6% antigos, passe `--hub-fee
@@ -205,8 +207,9 @@ use exatamente os valores canônicos:
 
 **Defaults que enganam (documentados de propósito):**
 
-- `--validate-top` default **0** = sem validação per-blueprint se omitido —
-  crítico, dado os ~76% de falsos sem ela. Canônico = `30`.
+- `--validate-top`: omitido = valida **todas** (Lote 3). `N` limita, `0` desliga
+  (sem validação ~76% dos achados são falsos). Os comandos canônicos do skill
+  `/scan` ainda passam `30` explícito.
 - `--min-net-margin`: default **0.0 no scanner** e **0.25 no postprocess** —
   o comando canônico passa `0.20` explícito no scanner; no postprocess, quem
   quiser o mesmo corte precisa passar explicitamente.
@@ -507,6 +510,27 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
 - `asc` (Ascended Heroes) também **NÃO** precisa de override: o resgate tcgcsv
   dele é um bulk único, não per-listing — mas exige o gotcha do
   `--max-consecutive-misses > 0` (ver "Como rodar").
+
+---
+
+## Desfecho de cada set, skip-list e resgate tcgcsv (Lote 3, 2026-11)
+
+- **Três desfechos por set** (gravados no `set_complete` do checkpoint e no
+  resumo do run): `complete` · `no_coverage` (a fonte respondeu e não tem as
+  cartas; `unpriced` = quantas ficaram sem preço) · `operational_failure`
+  (timeout, 5xx, erro de rede, erro inesperado, falha em massa de preço — **tentar
+  de novo**; aparece no resumo como "NÃO CONCLUÍDOS — tentar de novo").
+- **Skip-list só para ausência EFETIVA de cobertura:** corte por misses
+  consecutivos **e** nada do set precificado (nem pelo resgate). Falha
+  operacional **nunca** entra na skip-list. Entradas antigas continuam sendo
+  lidas e expiram (TTL 7 dias para `no_coverage_`, `network_error_`, timeouts).
+- **Resgate tcgcsv:** tudo que a pokemontcg.io não precificou (misses do fim do
+  set, falhas, listings não alcançados) é oferecido ao tcgcsv (referência buscada
+  **neste run**, mesma escada de variante). Cada linha leva `Fonte Preço` e
+  `Ref. Data/Hora`. Resgate parcial **nunca** é "completo".
+- **Nada some:** listings sem preço vão para a aba **"Sem preço"** do XLSX
+  (motivo: `sem_cobertura`, `falha_operacional` ou `nao_alcancado`) e contam em
+  `Stats` (`sets_operational_failure`, `sets_no_coverage`, `listings_sem_preco`).
 
 ---
 
