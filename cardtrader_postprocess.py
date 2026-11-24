@@ -870,6 +870,8 @@ def build_summary(df: pd.DataFrame, cfg: DecisionConfig, extra_blocks: dict | No
             origin.append((lbl, "não informado (XLSX sem aba Stats)"))
     if st.get("filtros_aplicados") is not None:
         origin.append(("Filtros aplicados", str(st.get("filtros_aplicados"))))
+    if str(st.get("cobertura_baixa") or "").strip() not in ("", "nan"):
+        origin.append(("⚠️ Cobertura baixa (menos da metade precificada)", str(st.get("cobertura_baixa"))))
     if str(st.get("saude_fonte_principal") or "").strip() not in ("", "nan"):
         origin.append(("Fonte principal de preço", str(st.get("saude_fonte_principal"))))
     for lbl, key in (("--chase-only descartou", "skipped_non_chase"),
@@ -1120,6 +1122,9 @@ def _origin_lines(scan_stats: dict | None, n_priced: int) -> list[str]:
     sh = st.get("saude_fonte_principal")
     if sh is not None and str(sh).strip() and str(sh) != "nan":
         out.append(f"_Fonte principal de preço: {str(sh).strip()}._")
+    cb = st.get("cobertura_baixa")
+    if cb is not None and str(cb).strip() and str(cb) != "nan":
+        out.append(f"_⚠️ Cobertura baixa (menos da metade das ofertas precificada): {str(cb).strip()}._")
     nc, no = num("skipped_non_chase"), num("opportunities_only_descartadas")
     if nc:
         out.append(f"_--chase-only descartou {nc} oferta(s) antes da precificação (não aparecem em nenhuma aba)._")

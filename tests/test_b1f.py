@@ -366,3 +366,39 @@ def test_holo_only_override_never_beats_an_explicit_non_holo_label():
 
 def test_groups_retry_wait_is_simulated_in_the_suite():
     assert sc.TcgCsvFallbackProvider.GROUPS_RETRY_WAIT_S == 0
+
+
+# ───────── 7: cobertura baixa salta aos olhos ─────────
+def _low_cov_scanner():
+    from test_b1e import _build
+    rows = ([(k, "Unlimited Holofoil", 40.0 + k) for k in (1, 2)]                 # 2 precificadas
+            + [(k, "Normal", 3.0) for k in range(3, 19)])                          # 16 sem ref compatível
+    s, listings = _build(20, rows, lambda i: None, breaker="off")                  # 19, 20 ausentes = 2 sem preço
+    s.scan([EXP])
+    return s
+
+
+def test_run_summary_flags_any_set_with_less_than_half_priced_counting_all_reasons():
+    s = _low_cov_scanner()
+    o = s.set_outcomes[0]
+    assert o["status"] == "complete_with_unpriced" and len(s.noref_rows) == 16
+    text = "\n".join(s.run_summary_lines())
+    assert "ABAIXO DE METADE" in text
+    assert "asc: 2 de 20 precificadas" in text
+    assert "16 sem referência compatível" in text and "2 sem preço" in text
+    assert s.stats["cobertura_baixa"] and "asc: 2 de 20" in s.stats["cobertura_baixa"]
+
+
+def test_healthy_set_is_not_flagged():
+    from test_b1e import _build, _all_rows
+    s, _l = _build(20, _all_rows(20), lambda i: None, breaker="off")
+    s.scan([EXP])
+    assert "ABAIXO DE METADE" not in "\n".join(s.run_summary_lines())
+    assert s.stats["cobertura_baixa"] == ""
+
+
+def test_delivery_footer_repeats_the_low_coverage_warning(tmp_path):
+    md, _ = _run_pp(tmp_path, [_opp(0)], stats={
+        "listings_fetched": 100, "listings_after_filters": 80,
+        "cobertura_baixa": "xybsp: 5 de 203 precificadas; 187 sem referência compatível (raridade 'Promo' inconclusiva)"})
+    assert "Cobertura baixa" in md and "xybsp: 5 de 203 precificadas" in md

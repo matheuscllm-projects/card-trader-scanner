@@ -4668,6 +4668,7 @@ class Scanner:
             or "(nenhum)")
         self.stats["listings_sem_preco"] = len(self.unpriced_rows)
         self.stats["saude_fonte_principal"] = self._source_health_line() or ""
+        self.stats["cobertura_baixa"] = " | ".join(self._low_coverage())
         for line in self.run_summary_lines():
             log.warning(line) if ("tentar de novo" in line) else log.info(line)
         # Ordena por margem bruta desc (maior oportunidade primeiro)
@@ -4700,6 +4701,35 @@ class Scanner:
         tail = (f"{k} set atendido pelo tcgcsv" if k == 1 else f"{k} sets atendidos pelo tcgcsv")
         return "; ".join(parts) + "; " + tail
 
+    def _low_coverage(self) -> list[str]:
+        """B1f: todo set avaliado em que MENOS DA METADE das ofertas terminou precificada, contando
+        TODOS os motivos (sem preço + sem referência compatível), com a fração e o motivo dominante."""
+        from collections import Counter
+        out = []
+        for o in getattr(self, "set_outcomes", []):
+            if o.get("status") == "operational_failure" or not o.get("total"):
+                continue
+            code, total = o["set"], o["total"]
+            nref_rows = [r for r in getattr(self, "noref_rows", []) if r.get("set") == code]
+            unp_rows = [r for r in getattr(self, "unpriced_rows", []) if r.get("set") == code]
+            n_ref = o.get("noref") if o.get("noref") is not None else len(nref_rows)
+            priced = total - o.get("unpriced", 0) - n_ref
+            if priced * 2 >= total:
+                continue
+            parts = [f"{code}: {priced} de {total} precificadas"]
+            if n_ref:
+                def _why(r):
+                    m = str(r.get("motivo") or "")
+                    return (f"raridade {r.get('rarity')!r} inconclusiva" if "inconclusiv" in m
+                            else (m.split(" (disponíveis")[0] or "sem referência compatível"))
+                dom = Counter(_why(r) for r in nref_rows).most_common(1)
+                parts.append(f"{n_ref} sem referência compatível" + (f": {dom[0][0]}" if dom else ""))
+            if o.get("unpriced"):
+                dom = Counter(r.get("reason") for r in unp_rows).most_common(1)
+                parts.append(f"{o['unpriced']} sem preço" + (f": {dom[0][0]}" if dom else ""))
+            out.append("; ".join(parts))
+        return out
+
     def run_summary_lines(self) -> list[str]:
         """Resumo do run pelos QUATRO desfechos (Lote 3b): completo · completo com
         N sem preço (set coberto; ofertas sem referência na aba "Sem preço") ·
@@ -4724,10 +4754,10 @@ class Scanner:
                 return f"{o['set']} ({priced}/{o['total']} precificadas, {o['unpriced']} sem preço)"
             lines.append("Completos com listings sem preço (aba 'Sem preço'): " +
                          ", ".join(_frac(o) for o in cu))
-            low = [o for o in cu if o["total"] and (o["total"] - o["unpriced"]) * 2 < o["total"]]
-            if low:
-                lines.append("⚠️ ABAIXO DE METADE precificada (cobertura fraca — conferir antes de confiar): " +
-                             ", ".join(f"{o['set']} ({o['total'] - o['unpriced']}/{o['total']})" for o in low))
+        low = self._low_coverage()
+        if low:
+            lines.append("⚠️ ABAIXO DE METADE precificada (cobertura fraca — conferir antes de confiar): " +
+                         " | ".join(low))
         by: dict = {}
         for o in outs:
             for k, v in (o.get("by_source") or {}).items():
