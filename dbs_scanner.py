@@ -25,7 +25,8 @@ Pokémon-only e deixava passar deals de Dragon Ball (ex.: energy markers Gold
 e promos Release Event Winner do set Fusion World Promos).
 
 Invariantes herdados da frota:
-  • Margem BRUTA base compra: (TCG_BRL − CT_BRL) / CT_BRL — sem taxa embutida.
+  • Margem sobre a VENDA: (TCG_BRL − CT_BRL) / TCG_BRL (corte = threshold);
+    ROI = (TCG_BRL − CT_BRL) / CT_BRL só informativo — sem taxa embutida.
   • --threshold em FRAÇÃO (0.30 = 30%) — convenção CardTrader/COMC/Selados.
   • Só Near Mint — match EXATO == "Near Mint" na condição da oferta; nunca
     substring. Graded/assinada nunca entra.
@@ -321,6 +322,14 @@ def carta_label(bp: dict) -> str:
     return label
 
 
+def margem_venda_roi(ct_brl: float, tcg_brl: float) -> tuple[float | None, float | None]:
+    """(margem sobre a VENDA, ROI sobre a COMPRA). Ct ou tcg ≤ 0 → (None, None).
+    Corte (threshold) vale para a margem sobre a venda; ROI é só informativo."""
+    if ct_brl <= 0 or tcg_brl <= 0:
+        return None, None
+    return (tcg_brl - ct_brl) / tcg_brl, (tcg_brl - ct_brl) / ct_brl
+
+
 def classify(margin: float, ct_brl: float, tcg_brl: float, threshold: float) -> tuple[str, str]:
     """(bucket, flag). Buckets: compra | revisar | quase | resto."""
     junk = ct_brl < JUNK_RATIO * tcg_brl
@@ -342,7 +351,8 @@ def build_rows(expansion: dict, blueprints: list[dict], offers_by_bp: dict,
     silêncio (vai pro sidecar _semref.csv para conferência manual)."""
     stats = {"blueprints": 0, "selados_pulados": 0, "sem_oferta_nm": 0,
              "sem_ref_tcg": 0, "abaixo_piso": 0, "avaliadas": 0,
-             "ofertas_moeda_pulada": 0, "resgatadas_join2": 0}
+             "ofertas_moeda_pulada": 0, "resgatadas_join2": 0,
+                   "sem_preco_valido": 0}
     brl_per_usd = rates["BRL"]
     rows = []
     semref: list[dict] = []
@@ -394,7 +404,13 @@ def build_rows(expansion: dict, blueprints: list[dict], offers_by_bp: dict,
             continue
         tcg_low = (product.get("lows") or {}).get(subtype)
         tcg_brl = tcg_usd * brl_per_usd
-        margin = (tcg_brl - ct_brl) / ct_brl
+        margin, roi = margem_venda_roi(ct_brl, tcg_brl)
+        if margin is None:
+            stats["sem_preco_valido"] += 1
+            print(f"AVISO sem preço válido: {carta_label(bp)} ({expansion.get('name', '')}) "
+                  f"ct_brl={ct_brl:.2f} tcg_usd={tcg_usd:.2f} — fora da tabela, contado no rodapé",
+                  file=sys.stderr, flush=True)
+            continue
         stats["avaliadas"] += 1
         rows.append({
             "carta": carta_label(bp),
@@ -402,7 +418,7 @@ def build_rows(expansion: dict, blueprints: list[dict], offers_by_bp: dict,
             "raridade": (bp.get("fixed_properties") or {}).get("dragonball_rarity") or "—",
             "ct_brl": ct_brl, "tcg_usd": tcg_usd, "tcg_brl": tcg_brl,
             "tcg_low_usd": tcg_low, "ref_volatil": ref_volatile(tcg_usd, tcg_low),
-            "dif_brl": tcg_brl - ct_brl, "margem": margin,
+            "dif_brl": tcg_brl - ct_brl, "margem": margin, "roi": roi,
             "qtd": qty, "ofertas_nm": n_valid, "subtipo": subtype, "join": join_via,
             "oferta_url": f"https://www.cardtrader.com/cards/{bp['id']}",
             "tcg_url": product["url"],
@@ -416,20 +432,21 @@ def fmt_brl(v: float) -> str:
     return f"R${v:,.2f}".replace(",", "@").replace(".", ",").replace("@", ".")
 
 
-HEADER = "| # | Margem % | CT R$ | TCG US$ | Dif | Carta | Set | Raridade | Cond | Qtd | Links |"
-SEP = "|---|---|---|---|---|---|---|---|---|---|---|"
+HEADER = "| # | Margem venda % | ROI aquisição % | CT R$ | TCG US$ | Dif | Carta | Set | Raridade | Cond | Qtd | Links |"
+SEP = "|---|---|---|---|---|---|---|---|---|---|---|---|"
 
 
 def _table(rows: list[dict], bold: bool, with_flag: bool = False) -> list[str]:
     """Tabela canônica; o bucket REVISAR ganha coluna Flag com o MOTIVO por linha
     (possível lixo vs referência volátil), no estilo da entrega do CT Pokémon."""
     if with_flag:
-        out = ["| # | Margem % | CT R$ | TCG US$ | Dif | Carta | Set | Raridade | Cond | Qtd | Flag | Links |",
-               "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+        out = ["| # | Margem venda % | ROI aquisição % | CT R$ | TCG US$ | Dif | Carta | Set | Raridade | Cond | Qtd | Flag | Links |",
+               "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     else:
         out = [HEADER, SEP]
     for i, r in enumerate(rows, 1):
         marg = f"{r['margem'] * 100:.1f}%"
+        roi_s = f"{r['roi'] * 100:.1f}%"
         if bold:
             marg = f"**{marg}**"
         links = f"[oferta]({r['oferta_url']}) · [TCG]({r['tcg_url']})"
@@ -438,7 +455,7 @@ def _table(rows: list[dict], bold: bool, with_flag: bool = False) -> list[str]:
         flag_txt = str(r.get('flag') or '—').replace("|", "\\|")
         flag_col = f"{flag_txt} | " if with_flag else ""
         out.append(
-            f"| {i} | {marg} | {fmt_brl(r['ct_brl'])} | {reference_price(format(r['tcg_usd'], '.2f'), r.get('tcg_url'))} | "
+            f"| {i} | {marg} | {roi_s} | {fmt_brl(r['ct_brl'])} | {reference_price(format(r['tcg_usd'], '.2f'), r.get('tcg_url'))} | "
             f"{fmt_brl(r['dif_brl'])} | {carta} | {r['set']} | {r['raridade']} | NM | "
             f"{r['qtd']} | {flag_col}{links} |"
         )
@@ -489,7 +506,7 @@ def build_markdown(rows: list[dict], stats: dict, meta: dict) -> str:
         f"(dump {meta.get('tcg_dump', 'n/d')}) · "
         f"Câmbio: US$1 = R${meta['fx']:.4f} ({meta['fx_fonte']}) · "
         f"Threshold: {threshold:.2f} (fração = {threshold * 100:.0f}%) · Piso ref: US${meta['min_price_usd']:.2f} · "
-        f"Margem bruta = (TCG R$ − CT R$) ÷ CT R$, sem taxas · Ofertas: menor NM/EN não-graded AO VIVO"
+        f"Margem venda = (TCG R$ − CT R$) ÷ TCG R$ · ROI = (TCG R$ − CT R$) ÷ CT R$ (informativo) · sem taxas · Ofertas: menor NM/EN não-graded AO VIVO"
     )
     out.append("")
     out.append(
@@ -499,7 +516,8 @@ def build_markdown(rows: list[dict], stats: dict, meta: dict) -> str:
         f"{stats['sem_ref_tcg']} sem referência TCG (join `tcg_player_id` vazio ou sem market price — ficam FORA, nunca inventamos) · "
         f"{stats.get('resgatadas_join2', 0)} com referência recuperada pelo join secundário "
         f"(nome+número, match único; contadas antes do piso) · "
-        f"{stats['abaixo_piso']} abaixo do piso · **{stats['avaliadas']} avaliadas**"
+        f"{stats['abaixo_piso']} abaixo do piso · {stats.get('sem_preco_valido', 0)} sem preço válido (ct ou ref ≤ 0) · "
+        f"**{stats['avaliadas']} avaliadas**"
     )
     if stats.get("ofertas_moeda_pulada"):
         out.append(f"⚠️ {stats['ofertas_moeda_pulada']} ofertas puladas por moeda sem câmbio conhecido.")
@@ -535,7 +553,7 @@ def write_csv(rows: list[dict], path: Path) -> None:
     if not rows:
         path.write_text("", encoding="utf-8")
         return
-    cols = ["margem", "ct_brl", "tcg_usd", "tcg_low_usd", "ref_volatil", "tcg_brl", "dif_brl", "carta", "set", "raridade", "join",
+    cols = ["margem", "roi", "ct_brl", "tcg_usd", "tcg_low_usd", "ref_volatil", "tcg_brl", "dif_brl", "carta", "set", "raridade", "join",
             "qtd", "ofertas_nm", "subtipo", "flag", "oferta_url", "tcg_url"]
     with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore")
@@ -625,7 +643,8 @@ def main(argv: list[str] | None = None) -> int:
     all_semref: list[dict] = []
     total_stats = {"blueprints": 0, "selados_pulados": 0, "sem_oferta_nm": 0,
                    "sem_ref_tcg": 0, "abaixo_piso": 0, "avaliadas": 0,
-                   "ofertas_moeda_pulada": 0, "resgatadas_join2": 0}
+                   "ofertas_moeda_pulada": 0, "resgatadas_join2": 0,
+                   "sem_preco_valido": 0}
     for i, exp in enumerate(targets, 1):
         print(f"[scan] ({i}/{len(targets)}) {exp.get('code')} — {exp.get('name')}…", flush=True)
         bps = fetch_blueprints(exp["id"], headers)
