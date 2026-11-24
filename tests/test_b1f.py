@@ -410,3 +410,32 @@ def test_claude_md_documents_the_breaker_and_reference_age_flags():
                  "--no-source-breaker", "--max-ref-age-days"):
         assert flag in t, flag
     assert "valor definitivo é do dono" in t
+
+
+# ───────── 8: "Secret Rare" de 2008-2016 (dado real: 0 exceção entre os groups) ─────────
+_SEC = json.loads((REPO_ROOT / "tests" / "fixtures" / "variants" / "b1f_secret_evidence.json").read_text(encoding="utf-8"))
+
+
+def test_secret_rare_is_holo_in_the_xy_and_bw_era_but_not_where_data_has_exceptions():
+    for rel in ("2011-04-25", "2013-05-08", "2014-05-07", "2015-08-12", "2016-08-03"):    # blw ... sts
+        assert cv.holo_detection("Secret Rare", set_released=rel).is_holo, rel
+    assert not cv.holo_detection("Secret Rare", set_released="2016-11-02", set_code="evo").is_holo   # XY Evolutions
+    assert not cv.holo_detection("Secret Rare", set_released="2005-02-14").is_holo                   # Deoxys: exceção
+    assert not cv.holo_detection("Secret Rare", set_released="2003-05-12").is_holo                   # Skyridge: exceção
+    assert cv.holo_detection("Secret Rare", set_released="2017-02-03").is_holo
+
+
+def test_secret_rare_rule_matches_the_real_data_group_by_group():
+    """Guarda dirigida pelo dado: onde o código diz 'holo', o group real não tem exceção."""
+    for g in _SEC["groups"]:
+        code = "evo" if g["group"].startswith("XY - Evolutions") else None
+        says_holo = cv.holo_detection("Secret Rare", set_released=g["pub"], set_code=code).is_holo
+        if says_holo:
+            assert not g["exceptions"], (g["group"], g["exceptions"][:2])
+
+
+def test_xy_era_secret_rare_offer_now_matches_holofoil_reference():
+    rows = [{"pid": 7, "name": "Mega Charizard EX", "number": "107/108", "rarity": "Secret Rare",
+             "prices": [["Holofoil", 120.0]]}]
+    prov = _real_provider("sts", 1689, "XY - Steam Siege", "2016-08-03T00:00:00", rows)
+    assert prov.market_price_usd("Mega Charizard EX", "sts", "107/108", rarity="Secret Rare") == 120.0

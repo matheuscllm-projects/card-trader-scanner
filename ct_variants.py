@@ -107,7 +107,11 @@ _ALIASES = {"rare prism star": "prism rare",
 HOLO_ONLY_SETS = {"det": "Detective Pikachu: 18/18 cartas só têm Holofoil no TCGplayer"}
 # Ultra/Secret Rare: tem excecao so ate esta data (ultima excecao observada: Ultra
 # 2005-05-09 EX Emerald; Secret 2016-11-02 XY Evolutions). Daqui em diante, 0 excecao.
-HOLO_FROM = {"ultra rare": "2005-05-10", "secret rare": "2016-11-03"}
+# B1f: Secret Rare: dado real (tcgcsv, 43 groups, 2026-11-24; tests/fixtures/variants/b1f_secret_evidence.json)
+# = 0 exceção de 2008-11-05 (Stormfront) a 2016-08-03; as exceções são Skyridge, FRLG, Deoxys (antes)
+# e XY Evolutions (2016-11-02, 5/5 só Normal) -> o corte vira 2008-11-05 e `evo` é exceção por set.
+HOLO_FROM = {"ultra rare": "2005-05-10", "secret rare": "2008-11-05"}
+HOLO_FROM_EXCEPT_SETS = {"secret rare": frozenset({"evo"})}
 # "Rare" simples: holo so a partir de Scarlet & Violet (SV01 = 2023-03-31).
 SV_START = "2023-03-31"
 
@@ -118,6 +122,7 @@ def _words(s: str) -> frozenset:
 
 _NATURAL = {_words(n) for n in HOLO_NATURAL_NAMES} | {_words(a) for a in _ALIASES}
 _FROM = {_words(n): d for n, d in HOLO_FROM.items()}
+_FROM_EXCEPT = {_words(n): s for n, s in HOLO_FROM_EXCEPT_SETS.items()}
 
 
 def _iso(d) -> Optional[str]:
@@ -157,6 +162,8 @@ def holo_detection(*rarities: Optional[str], set_released=None,
         if w in _NATURAL:
             return HoloDetection(True, False, "natureza")
         cut = SV_START if w == frozenset({"rare"}) else _FROM.get(w)
+        if cut is not None and (set_code or "").lower() in _FROM_EXCEPT.get(w, ()):
+            continue                      # set com exceção comprovada em dado real (ex.: evo)
         if cut is not None:
             if rel is None:
                 needs_era = True

@@ -287,9 +287,10 @@ def test_r2_prova_rare_por_era_no_dado_real():
 @pytest.mark.parametrize("rar,rel,esperado", [
     ("Ultra Rare", "2005-05-09", False), ("Ultra Rare", "2005-05-10", True),
     ("Ultra Rare", "2024-01-01", True),
-    ("Secret Rare", "2016-11-02", False), ("Secret Rare", "2016-11-03", True),
+    ("Secret Rare", "2008-11-04", False), ("Secret Rare", "2008-11-05", True),   # B1f: dado real, 0 exceção desde Stormfront
+    ("Secret Rare", "2016-11-03", True),
     ("Rare Ultra", "2020-01-01", True), ("Rare Secret", "2020-01-01", True),
-    ("Rare Secret", "2010-01-01", False),
+    ("Rare Secret", "2010-01-01", True), ("Rare Secret", "2005-02-14", False),
 ])
 def test_r3_ultra_e_secret_so_depois_da_ultima_excecao(rar, rel, esperado):
     assert cv.rarity_is_holo(rar, set_released=rel) is esperado
