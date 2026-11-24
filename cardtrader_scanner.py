@@ -1144,6 +1144,7 @@ class Opportunity:
     # "dado de" (data do dado) ou "buscado em" (só a hora da busca, quando a fonte não expõe a data)
     ref_data_at: str = ""
     ref_data_label: str = ""
+    ref_swap: str = ""   # B1f: referência da fonte principal (velha) trocada pela do tcgcsv (mais nova)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -3283,7 +3284,9 @@ class Scanner:
                  keep_all_priced: bool = True,
                  tcgcsv: Optional["TcgCsvFallbackProvider"] = None,
                  tcgcsv_fallback: bool = True,
-                 language: str = LANGUAGE_FILTER):
+                 language: str = LANGUAGE_FILTER,
+                 max_ref_age_days: float = 7.0):
+        self.max_ref_age_days = max_ref_age_days   # B1f: idade máx. da referência da fonte principal (provisório; do dono)
         self.ct = ct
         # v2.29: idioma das OFERTAS CT (`properties_hash.pokemon_language`).
         # Default "en" = comportamento histórico. Normalizado (apelidos →
@@ -4147,8 +4150,14 @@ class Scanner:
                 set_consecutive_misses = 0
                 streak_cards.clear()
                 set_tcg_hits += 1
-                opp = self._build_opportunity(l, tcg_market, self.pricing)
+                src_prov, swap = self.pricing, ""
+                alt = self._fresher_tcgcsv(exp_code, exp_name, l)
+                if alt is not None:
+                    tcg_market, swap = alt
+                    src_prov = self.tcgcsv
+                opp = self._build_opportunity(l, tcg_market, src_prov)
                 if opp is not None:
+                    opp.ref_swap = swap
                     yield opp
                 else:
                     self._set_accounted.add(l.uid)   # descartada por filtro explícito
@@ -4313,6 +4322,39 @@ class Scanner:
         if key is not None and not divided:
             return ct_variants.ED_NONE
         return ct_variants.ED_UNL
+
+    def _ref_age_days(self, provider) -> Optional[int]:
+        d = _iso_date(getattr(provider, "last_ref_data_at", None))
+        if not d:
+            return None
+        try:
+            return (datetime.now().date() - datetime.strptime(d, "%Y-%m-%d").date()).days
+        except ValueError:
+            return None
+
+    def _fresher_tcgcsv(self, exp_code: str, exp_name: str, l: "Listing"):
+        """B1f: a referência da fonte principal passou do limite de idade E o tcgcsv tem referência
+        COMPATÍVEL (mesma regra exata) -> (preço, nota da troca); senão None (fica a da principal;
+        o postprocess marca como desatualizada)."""
+        age = self._ref_age_days(self.pricing)
+        if (age is None or age <= getattr(self, "max_ref_age_days", 7.0)
+                or not self._tcgcsv_can_fallback() or self.pricing is self.tcgcsv):
+            return None
+        old_at = _iso_date(getattr(self.pricing, "last_ref_data_at", None))
+        try:
+            if not self.tcgcsv.prefill_set(exp_code, self._ptcg_setcodes_for(exp_code), exp_name):
+                return None
+            px = self.tcgcsv.market_price_usd(l.card_name, l.set_code, l.collector_number, foil=l.foil,
+                                              rarity=l.rarity, first_edition=l.first_edition)
+        except Exception as e:  # noqa: BLE001 — falha do tcgcsv aqui só mantém a referência velha (marcada)
+            log.debug(f"  troca por idade: tcgcsv falhou {l.card_name}: {e!r}")
+            return None
+        if not px or px <= 0:
+            return None
+        self.stats["refs_trocadas_por_idade"] = self.stats.get("refs_trocadas_por_idade", 0) + 1
+        new_at = _iso_date(getattr(self.tcgcsv, "last_ref_data_at", None)) or "lote do dia"
+        return px, (f"referência trocada: {self._primary_name()} (dado de {old_at}, {age} dias) → "
+                    f"tcgcsv (dado de {new_at})")
 
     def _primary_name(self) -> str:
         n = getattr(getattr(self, "pricing", None), "name", None)
@@ -4948,6 +4990,7 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         # B1b: data do DADO da referência + rótulo ("dado de" | "buscado em"); a margem líquida
         # usa só Hub + frete -> sempre PARCIAL, com a lista dos custos não informados.
         "Data Ref.", "Rótulo Data Ref.", "Líquida", "Custos Não Informados",
+        "Troca de Referência",
     ]
     ws.append(headers)
 
@@ -5003,6 +5046,7 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
             opp.validation_reason or "",
             opp.ref_data_at or "", opp.ref_data_label or "",
             *_liquid_label(opp, hub_fee_rate),
+            opp.ref_swap or "",
         ])
 
     # ─── Formatação ───
@@ -5232,6 +5276,10 @@ def parse_args():
                    help=(f"v2.4: wall-clock timeout per set (minutos). Default "
                          f"{DEFAULT_PER_SET_TIMEOUT_MIN}. Quando excedido durante pricing loop, "
                          f"set é abortado e adicionado à skip-list. 0 = desativado."))
+    p.add_argument("--max-ref-age-days", type=float, default=7.0,
+                   help=("B1f: idade máxima (dias) do dado da referência da fonte principal; acima disso, se o "
+                         "tcgcsv tiver referência compatível mais nova, ela é usada (troca registrada na linha). "
+                         "Default 7 é PROVISÓRIO: o valor definitivo é do dono."))
     p.add_argument("--no-source-breaker", action="store_true",
                    help="B1e: desliga o disjuntor da fonte principal (pokemontcg.io → tcgcsv em lote).")
     p.add_argument("--source-fail-rate", type=float, default=0.5,
@@ -5594,6 +5642,7 @@ def main():
         tcgcsv=tcgcsv_provider,
         tcgcsv_fallback=tcgcsv_fallback_on,
         language=args.language,
+        max_ref_age_days=args.max_ref_age_days,
     )
     scanner.breaker = None if args.no_source_breaker else SourceBreaker(
         window=max(2, args.source_window), min_samples=max(2, round(0.6 * max(2, args.source_window))),
