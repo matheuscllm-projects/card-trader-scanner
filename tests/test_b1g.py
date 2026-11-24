@@ -308,6 +308,7 @@ def test_property_full_path_with_hand_written_oracle():
             # inferir o holo contra um rótulo CT conclusivo só vale se a carta NÃO tem nenhuma chave normal (com ou sem preço)
             assert not any(_FIN_OF[k] == "normal" for k in prices), ("inferiu holo com impressão normal existente", ct, keys, state)
         if om.inferred is None:
+            assert ct not in (None, "", "Promo"), ("promo/vazia nunca é 'Sim' (acabamento não declarado)", ct, m.key, era, code)
             want = decl if decl is not None else "normal"          # inconclusivo sem inferência = normal (política)
             if code == "det" and ct in (None, "", "Promo") and ct != "Non-Holo":
                 want = "holo" if fin == "holo" else want
@@ -344,3 +345,69 @@ def test_source_counters_match_the_xlsx_rows_including_age_swaps(tmp_path):
     assert swaps == 2 == s.stats["refs_trocadas_por_idade"]
     assert s.stats["tcgcsv_fallback_priced"] + swaps == rows["tcgcsv"]       # parcelas fecham com o total da fonte
     assert f"{swaps} referências trocadas por idade" in text
+
+
+# ───────── B1h: promo com raridade inconclusiva + única impressão ─────────
+_PRM = json.loads((REPO_ROOT / "tests" / "fixtures" / "variants" / "b1h_promos.json").read_text(encoding="utf-8"))
+
+
+def _wiz():
+    return _real_provider("wiz", 1418, "Wizards Black Star Promos", "1999-07-01T00:00:00", _PRM["wiz"])
+
+
+@pytest.mark.parametrize("name,num,price", [("Smeargle", "032", 19.08), ("Mew", "008", 11.9)])
+def test_promo_with_only_a_normal_print_matches_but_as_inferred(name, num, price):
+    p = _wiz()
+    assert p.market_price_usd(name, "wiz", num, rarity="Promo") == price      # margem calculável
+    assert p.last_ref_inferred and "raridade 'Promo' não informa o acabamento" in p.last_ref_inferred
+    assert "só tem a impressão normal" in p.last_ref_inferred
+    assert p.last_ref_exact in (True, False)                                  # ainda é Match OK; o rótulo é "Inferido"
+
+
+def test_mirror_case_promo_with_only_a_holofoil_print_stays_without_reference():
+    xy = _PRM["xybsp"][0]
+    p = _real_provider("xybsp", 1451, "XY Black Star Promos", "2014-02-05T00:00:00", [xy])
+    assert p.market_price_usd(xy["name"], "xybsp", xy["number"], rarity="Promo") is None
+    assert p.last_ref_status == cv.INCOMPATIVEL and not p.last_ref_inferred
+    # a escolha mora num único mapa nomeado: trocar o valor muda o resultado
+    assert cv.INCONCLUSIVE_SINGLE_PRINT_POLICY == {"normal": "inferir", "holo": "sem_referencia"}
+
+
+def test_policy_map_is_the_single_switch(monkeypatch):
+    prices = {"holofoil": {"market": 7.0}}
+    assert cv.match_offer(prices, False, False, "Promo", ref_rarity="Promo").match.status == cv.INCOMPATIVEL
+    monkeypatch.setitem(cv.INCONCLUSIVE_SINGLE_PRINT_POLICY, "holo", "inferir")
+    om = cv.match_offer(prices, False, False, "Promo", ref_rarity="Promo")
+    assert om.match.status == cv.OK and om.inferred and "só tem a impressão holo" in om.inferred
+
+
+def test_promo_with_more_than_one_non_reverse_print_is_incompatible():
+    prices = {"normal": {"market": 1.0}, "holofoil": {"market": 9.0}}
+    om = cv.match_offer(prices, False, False, "Promo", ref_rarity="Promo")
+    assert om.match.status == cv.INCOMPATIVEL and "desconhecido" in om.match.reason
+
+
+def test_promo_reverse_offer_needs_a_reverse_key_declared_by_the_offer_field():
+    prices = {"normal": {"market": 1.0}}
+    assert cv.match_offer(prices, False, True, "Promo", ref_rarity="Promo").match.status == cv.INCOMPATIVEL
+    both = {"normal": {"market": 1.0}, "reverseHolofoil": {"market": 3.0}}
+    om = cv.match_offer(both, False, True, "Promo", ref_rarity="Promo")
+    assert om.match.status == cv.OK and om.match.key == "reverseHolofoil" and om.inferred is None
+    om2 = cv.match_offer(both, False, False, "Promo", ref_rarity="Promo")        # a mesma carta, oferta normal
+    assert om2.match.key == "normal" and om2.inferred
+
+
+def test_inferred_promo_is_counted_marked_and_never_compra(tmp_path):
+    o = _opp(0)
+    o.ref_inferred = "raridade 'Promo' não informa o acabamento; a referência só tem a impressão normal"
+    md, out = _run_pp(tmp_path, [o], stats={"scanned_at": "2026-11-24T04:51:58-03:00"})
+    assert "acabamento inferido da referência" in md and "[oferta](" in md
+    import pandas as pd
+    d = pd.read_excel(out, sheet_name="All Listings")
+    col = next(c for c in d.columns if str(c).lower().startswith("decis"))
+    assert not (d[col] == "COMPRA").any()
+
+
+def test_claude_md_documents_the_inconclusive_single_print_policy():
+    t = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "INCONCLUSIVE_SINGLE_PRINT_POLICY" in t and "Inferido" in t

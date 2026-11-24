@@ -339,6 +339,15 @@ def valid_published_on(value) -> Optional[str]:
 NO_INFERENCE_CT_RARITIES = frozenset({"", "promo"})
 
 
+# DECISÃO DO DONO PENDENTE (ponto único e nomeado): raridade CT vazia/"Promo" (não informa o acabamento)
+# + referência com UMA única impressão não-reverse -> política por acabamento dessa impressão:
+#   "inferir"        = casa como INFERIDO (margem exibida, nunca COMPRA)
+#   "sem_referencia" = continua SEM referência compatível
+# Mais de uma impressão não-reverse = INCOMPATIVEL (a oferta é de acabamento desconhecido). Hoje: a única
+# impressão normal infere (wiz 76); a única holo fica sem referência (xybsp 187, wiz 9, nbsp 5).
+INCONCLUSIVE_SINGLE_PRINT_POLICY = {"normal": "inferir", "holo": "sem_referencia"}
+
+
 def _may_infer_from_reference(ct_rarity) -> bool:
     return str(ct_rarity or "").strip().lower() not in NO_INFERENCE_CT_RARITIES
 
@@ -380,6 +389,20 @@ def match_offer(prices: dict, first_edition: bool, reverse: bool, ct_rarity: Opt
         if hd_ct.basis == "set":
             inferred = (f"acabamento holo inferido pelo set {set_code} ({HOLO_ONLY_SETS[set_code.lower()]}); "
                         f"a CardTrader diz {ct_rarity!r}")
+    elif not rarity_conclusive(ct_rarity) and not _may_infer_from_reference(ct_rarity):
+        # vazia/"Promo": a CardTrader NÃO informa o acabamento -> nada é "declarado"
+        labeled = any(c[0] for c in known.values())
+        want_ed = ED_1ST if first_edition else ED_UNL
+        pool = {k: c for k, c in known.items() if c[1] != FIN_REVERSE and (not labeled or c[0] == want_ed)}
+        fins = sorted({c[1] for c in pool.values()})
+        if len(fins) > 1:
+            blocked = (f"acabamento da oferta desconhecido (raridade CardTrader {ct_rarity!r} inconclusiva) e a "
+                       f"carta tem mais de uma impressão não-reverse ({', '.join(sorted(pool))}); não se presume")
+        elif len(fins) == 1 and INCONCLUSIVE_SINGLE_PRINT_POLICY.get(fins[0]) == "inferir":
+            lbl = "normal" if fins[0] == FIN_NORMAL else "holo"
+            hd = HoloDetection(fins[0] == FIN_HOLO, False, "")
+            inferred = (f"raridade {ct_rarity if ct_rarity else 'vazia'!r} não informa o acabamento; a referência "
+                        f"só tem a impressão {lbl}")
     else:
         hd_ref = holo_detection(ref_rarity, set_released=set_released, set_code=set_code)   # exceções de era valem p/ os 2 lados
         if hd_ref.is_holo:

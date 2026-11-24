@@ -668,6 +668,13 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
 - **Conflito de rótulo de acabamento:** raridade CardTrader conclusiva p/ não-holo + produto holo COM
   impressão normal = `VARIANTE_INCOMPATIVEL` ("raridades em conflito"); sem impressão normal (carta só
   existe em holo) vale holo. `publishedOn` do tcgcsv com o carimbo do lote não é data de lançamento.
+- **Acabamento declarado × inferido (B1g/B1h):** `Ref Compatível` = `Sim` só quando o acabamento sai do rótulo da
+  própria CardTrader; `Inferido` (coluna "Acabamento Inferido (motivo)") quando foi deduzido da referência
+  (carta só existe em holo; set holo-only `det`; rótulo CT desconhecido; **promo vazia/"Promo" com UMA única
+  impressão normal**). Inferido tem margem exibida, nunca COMPRA, e é contado por set no resumo. Ponto único
+  da decisão do dono: `ct_variants.INCONCLUSIVE_SINGLE_PRINT_POLICY` (`{"normal": "inferir", "holo":
+  "sem_referencia"}`; promo com única impressão holo segue sem referência até o dono trocar o valor) e
+  `NO_INFERENCE_CT_RARITIES`. Mais de uma impressão não-reverse = sem referência compatível.
 - **Motivo com fontes:** "Sem Ref Compatível"/"Sem preço" listam as fontes consultadas e as NÃO
   consultadas com a causa; o fallback vale nos dois sentidos (`--provider tcgcsv` consulta a
   pokemontcg.io quando saudável). Set com menos da metade precificada (todos os motivos) é destacado no
