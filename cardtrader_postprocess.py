@@ -555,8 +555,9 @@ def apply_card_hyperlinks(ws, df):
             link_idx = cols.index("Link CT") + 1
             for ri in range(2, len(df) + 2):
                 url = ws.cell(row=ri, column=link_idx).value
-                if isinstance(url, str) and url.startswith("http"):
-                    c = ws.cell(row=ri, column=price_idx)
+                c = ws.cell(row=ri, column=price_idx)
+                # B1r: célula VAZIA nunca vira link (openpyxl poria a URL como valor = "preço validado" falso)
+                if isinstance(url, str) and url.startswith("http") and c.value is not None:
                     c.hyperlink = url
                     c.font = HYPERLINK_FONT
     # TCG (R$) → Link TCG (clicar no preço abre a página TCGplayer pra conferir)
@@ -565,8 +566,8 @@ def apply_card_hyperlinks(ws, df):
         link_idx = cols.index("Link TCG") + 1
         for ri in range(2, len(df) + 2):
             url = ws.cell(row=ri, column=link_idx).value
-            if isinstance(url, str) and url.startswith("http"):
-                c = ws.cell(row=ri, column=tprice_idx)
+            c = ws.cell(row=ri, column=tprice_idx)
+            if isinstance(url, str) and url.startswith("http") and c.value is not None:   # B1r: idem (vazio fica vazio)
                 c.hyperlink = url
                 c.font = HYPERLINK_FONT
 
