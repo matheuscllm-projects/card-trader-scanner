@@ -129,9 +129,12 @@ Assim que **cada grupo** terminar (não espere os outros):
 ```bash
 python cardtrader_postprocess.py \
   --input outputs/scan_g<N>_<stamp>.xlsx \
-  --output outputs/relatorio_g<N>_<stamp>.xlsx \
-  --top-md 50
+  --output outputs/relatorio_g<N>_<stamp>.xlsx
 ```
+
+(**sem `--top-md`**: a entrega mostra TODAS as linhas de COMPRA e REVISAR. Se alguém limitar com
+`--top-md N`, o cabeçalho diz "mostrando N de M" e o rodapé diz quantas ficaram de fora e que
+elas estão na aba `Deals` do XLSX.)
 
 - **Cole no chat, VERBATIM, o `.md`** que ele gravou/imprimiu
   (`build_delivery_markdown` — única fonte de verdade do formato).

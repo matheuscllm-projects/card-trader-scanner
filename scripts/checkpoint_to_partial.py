@@ -44,6 +44,13 @@ def _num(v, default=0.0):
         return default
 
 
+def _vkey(pid, seller, first_edition, reverse) -> str:
+    """Mesma chave de validação do scanner (oferta + edição + reverse)."""
+    def b(v):
+        return v if isinstance(v, bool) else (str(v).strip().lower() in ("true", "1", "yes", "sim"))
+    return f"{pid}:{seller}:{'1st' if b(first_edition) else 'unl'}:{'rev' if b(reverse) else 'std'}"
+
+
 def best_net(o: dict) -> float:
     """Melhor margem líquida disponível: REAL validada > net bruta > margem bruta."""
     for k in ("real_net_margin_pct", "net_margin_pct", "margin_pct"):
@@ -134,7 +141,7 @@ def parse_checkpoint(path: Path):
                     "seller": lst.get("seller_username") or "",
                     "hub": bool(lst.get("seller_can_sell_via_hub")),
                     "url": lst.get("cardtrader_url") or "",
-                    "_key": f"{pid}:{lst.get('seller_username')}",
+                    "_key": _vkey(pid, lst.get("seller_username"), lst.get("first_edition"), lst.get("foil")),
                     # Link de REFERÊNCIA (TCGplayer) — obrigatório no contrato de
                     # entrega da frota (toda linha = [oferta] · [TCG]). Vem do
                     # campo `tcg_url` da Opportunity (card.tcgplayer.url do raw).
@@ -150,7 +157,7 @@ def parse_checkpoint(path: Path):
                     else:
                         deals.append(row)
             elif typ == "validation":
-                validations[f"{o.get('product_id')}:{o.get('seller')}"] = o
+                validations[_vkey(o.get("product_id"), o.get("seller"), o.get("first_edition"), o.get("reverse"))] = o
             elif typ == "validation_complete":
                 validation_complete = True
             elif typ == "set_complete":

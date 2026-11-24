@@ -86,4 +86,4 @@ def test_canonical_values_present_in_every_scan_command():
             assert flag in cmd, f"comando sem o valor canônico {flag!r}: {cmd}"
         # decisão do operador (Lote 3): validar TODAS — o canônico não limita
         assert "--validate-top" not in cmd, f"canônico não pode limitar a validação: {cmd}"
-    assert "--top-md 50" in SKILL
+    assert "--top-md" not in SKILL.split("## 4.")[1].split("```bash")[1].split("```")[0]  # B1b: entrega completa, sem --top-md

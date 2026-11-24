@@ -155,6 +155,19 @@ def holo_detection(*rarities: Optional[str], set_released=None) -> HoloDetection
     return HoloDetection(False, needs_era, "")
 
 
+def rarity_conclusive(rarity: Optional[str]) -> bool:
+    """A raridade da CardTrader permite decidir holo/nao-holo? Inconclusiva = vazia, "Promo" ou
+    qualquer grafia fora das listas conhecidas (so p/ EXPLICAR o motivo; nao muda o casamento)."""
+    rl = _NON_HOLO.sub("", (rarity or "").lower()).strip()
+    if not rl:
+        return False
+    if "holo" in rl or "shining" in rl:
+        return True
+    w = _words(rl)
+    return (w in _NATURAL or w in _FROM
+            or w in (frozenset({"rare"}), frozenset({"common"}), frozenset({"uncommon"})))
+
+
 def rarity_is_holo(*rarities: Optional[str], set_released=None) -> bool:
     return holo_detection(*rarities, set_released=set_released).is_holo
 

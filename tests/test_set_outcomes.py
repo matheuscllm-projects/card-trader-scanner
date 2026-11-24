@@ -176,7 +176,9 @@ def test_partial_coverage_is_not_skiplisted(tmp_path, monkeypatch, ):
                             tcgcsv_fallback=False, max_misses=2)
     opps, done, skip = _run(scanner, listings, tmp_path, monkeypatch)
     assert skip == {}, skip
-    assert done[0]["status"] == "complete_with_unpriced", done  # set coberto (1 hit)
+    # B1b: cortado com ofertas NÃO alcançadas → não é "completo": tentar de novo
+    assert done[0]["status"] == "operational_failure", done
+    assert done[0]["reason"].startswith("coverage_interrupted_"), done
     assert done[0]["unpriced"] == 5, done
 
 
@@ -265,7 +267,8 @@ def test_xlsx_has_reference_time_column_and_unpriced_sheet(tmp_path, monkeypatch
                    unpriced=scanner.unpriced_rows)
     wb = load_workbook(out)
     hdr = [c.value for c in wb["Oportunidades"][1]]
-    assert hdr[-8:-4] == ["Fonte Preço", "Ref. Data/Hora", "Validado em", "Validação"], hdr[-8:]
+    i = hdr.index("Fonte Preço")
+    assert hdr[i:i + 4] == ["Fonte Preço", "Ref. Data/Hora", "Validado em", "Validação"], hdr[-12:]
     assert "Sem preço" in wb.sheetnames, wb.sheetnames
     rows = [[c.value for c in r] for r in wb["Sem preço"].iter_rows(min_row=2)]
     assert any("Card 3" in str(r) for r in rows), rows

@@ -34,7 +34,7 @@ aponta onde dá pra comprar barato na Europa e revender caro. É o caminho
 
 Invariantes que valem para TODOS os scanners:
 
-- **Margem BRUTA, mínimo 30%** — só `(revenda − compra)/compra`, sem nenhuma taxa embutida (frete, cartão, IOF — o operador calcula por fora).
+- **Margem BRUTA, mínimo 30%** — sem nenhuma taxa embutida (frete, cartão, IOF — o operador calcula por fora). ⚠️ **Neste scanner a base é a VENDA:** `(referência − compra)/referência` (decisão do dono; o ROI `(ref − compra)/compra` é outra métrica, só informativa). Vale a margem sobre a venda.
 - **Piso de relevância R$50 (~US$10) — SÓ para cartas avulsas (singles).** Produtos SELADOS não têm piso (decisão do operador, 2026-06-27); lá o único critério é a margem ≥30%.
 - **Só Near Mint** — condição por match EXATO `== "NM"`, nunca substring (já vazou SP).
 - **Nunca inventar preço** — fonte falhou → marca fallback/erro e segue; jamais fabrica número.
@@ -49,7 +49,7 @@ Erros recorrentes (3 famílias — detalhe no manual):
 2. **Git:** branch ou `main` local defasado por squash-merge PARECE pendência. O teste real de "já mergeado" é `git diff --stat origin/main <branch>` estar vazio (não `git merge-base`).
 3. **Honestidade de preço:** inflação de referência, fallback tratado como real, NM frouxo → sempre validar versão/condição e rotular fallback.
 
-**Este scanner:** referência de preço = pokemontcg.io com validação per-blueprint (casa NM + variante exata) → **fallback `tcgcsv.com`** (v2.23; só em set que a pokemontcg.io não precifica, ex. `asc`; mesma escada de variante, nunca o mais barato); chaves = `CT_JWT`, `POKEMONTCG_API_KEY`.
+**Este scanner:** referência de preço = pokemontcg.io com validação per-blueprint (casa NM + variante exata) → **fallback `tcgcsv.com`** (v2.23; só em set que a pokemontcg.io não precifica, ex. `asc`; correspondência EXATA de edição e acabamento, nunca o mais barato); chaves = `CT_JWT`, `POKEMONTCG_API_KEY`.
 
 ---
 
@@ -162,9 +162,9 @@ Exemplo: compra 75, referência 100 → margem 25% (**não** passa em 30%), ROI 
 > de maior margem e `--validate-top 0` desliga a validação. Linha que não pôde
 > ser validada (erro de API, STALE) **continua na saída com o status real**.
 >
-> A opção `--hub-fee` continua existindo nos dois scripts e tem **default 0.0**
-> (margem bruta). Se um dia quiser reembutir os 6% antigos, passe `--hub-fee
-> 0.06` no scanner **e** no postprocess.
+> A opção `--hub-fee` existe nos dois scripts com **padrão 0,06** e só alimenta as colunas
+> **líquidas** (informativas) de preço cru; o corte de 30% é a margem sobre a venda e não
+> depende dela, e o preço validado do checkout já embute o Hub (nunca contado duas vezes).
 
 ---
 
@@ -365,9 +365,9 @@ nunca em arquivo versionado.
 >    XLSX/CSV por anexo como padrão. Só mande arquivo se o operador **pedir
 >    explicitamente**.
 > 3. **Mostrar TODOS os deals** (COMPRA + REVISAR) — não uma amostra curada.
->    Se forem muitos, use `--top-md N` com N alto o bastante pra cobrir todos
->    (o default 50 já cobre a grande maioria das runs); a planilha sempre traz
->    todos sem corte.
+>    O comando canônico NÃO usa `--top-md` (mostra tudo). Se alguém limitar com
+>    `--top-md N`, o cabeçalho diz "mostrando N de M" e o rodapé diz quantas ficaram
+>    de fora e em qual aba do XLSX (`Deals`) estão.
 > 4. **Não rankear "comprar/não comprar".** Você reporta margem, flags e fontes;
 >    quem decide capital é o operador.
 > 5. **NUNCA monte tabela à mão, nem mesmo quando "não há deal".** A ferramenta
@@ -400,14 +400,13 @@ ele imprime no terminal E grava um arquivo `.md` ao lado da planilha:
 ```bash
 .venv\Scripts\python.exe cardtrader_postprocess.py \
   --input outputs/scan_da_vez.xlsx \
-  --output outputs/relatorio_da_vez.xlsx \
-  --top-md 50                                 # quantas linhas na tabela do chat
+  --output outputs/relatorio_da_vez.xlsx      # sem --top-md: a tabela traz TODAS as linhas
 ```
 
 A tabela tem as colunas:
 
 ```
-| # | Margem % | CT US$ | TCG US$ | Dif | Carta | Set | Raridade | Cond | Qtd | Vendas 30d | Vendas 90d | Flag | Links |
+| # | Margem % | CT US$ | TCG US$ | Dif | Carta | Edição | Acabamento | Set | Raridade | Cond | Qtd | Vendas 30d | Vendas 90d | Fonte ref. | Data ref. | Flag | Links |
 ```
 
 O que cada coluna quer dizer:
@@ -421,6 +420,8 @@ O que cada coluna quer dizer:
 | **TCG US$** | preço de referência dos EUA (TCG Player), em dólar |
 | **Dif** | a diferença em dólar (TCG US$ − CT US$) — quanto "sobra" antes das taxas |
 | **Carta** | nome **+ número** numa célula só (ex.: `Hitmonlee (013/110)`). Se o nome já tem o número, não duplica |
+| **Edição / Acabamento** | edição da oferta (`1st Edition`, `Unlimited` ou `Sem divisão de edição`) e acabamento (`Normal`/`Holo`/`Reverse`) — a referência TCG é DESTA variante; `—` = scanner antigo, não informada |
+| **Fonte ref. / Data ref.** | fonte do preço de referência (`pokemontcg`/`tcgcsv`) e a data: `dado de …` = data do DADO (dump diário do tcgcsv, `updatedAt` do TCGplayer); `buscado em …` = só a hora da busca, quando a fonte não expõe a data |
 | **Set** | a coleção (código do CardTrader) |
 | **Raridade** / **Cond** | raridade oficial e condição (sempre Near Mint) |
 | **Qtd** | quantas unidades o vendedor tem (você importa em lote) |
@@ -586,7 +587,7 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
   trate os "≤~2h30" como estimativa, não garantia.
 - **Resgate tcgcsv:** tudo que a pokemontcg.io não precificou (misses do fim do
   set, falhas, listings não alcançados) é oferecido ao tcgcsv (referência buscada
-  **neste run**, mesma escada de variante). Cada linha leva `Fonte Preço` e
+  **neste run**, correspondência exata de edição e acabamento). Cada linha leva `Fonte Preço` e
   `Ref. Data/Hora`. Resgate parcial **nunca** é "completo".
 - **Nada some:** listings sem preço vão para a aba **"Sem preço"** do XLSX
   (motivo: `sem_cobertura`, `falha_operacional` ou `nao_alcancado`) e contam em
@@ -623,6 +624,28 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
   Promo. A CardTrader **não** envia "Double Rare" (usa "Ultra Rare"); todas as grafias de holo
   são reconhecidas por `ct_variants.holo_detection` com a data de lançamento do set
   (`releaseDate` da pokemontcg.io; `publishedOn` do group no tcgcsv).
+
+### B1b — fallback tcgcsv, entrega completa, cobertura
+
+- **Fallback tcgcsv para ref incompatível:** se a pokemontcg.io acha a carta mas sem a variante
+  exata, a oferta vai ao tcgcsv (mesma regra exata; grupo Shadowless nunca). Se o tcgcsv
+  também não resolve, UMA linha em "Sem Ref Compatível" com os dois motivos (um por fonte).
+  `Fonte Preço` diz quem precificou.
+- **Fonte e data na entrega:** colunas `Edição`, `Acabamento`, `Fonte ref.`, `Data ref.`. A data é a
+  do DADO quando a fonte expõe (tcgcsv: `last-updated.txt` do dump diário; pokemontcg.io:
+  `tcgplayer.updatedAt`) com o rótulo "dado de"; senão "buscado em" (hora da busca).
+- **Entrega completa:** o canônico não usa `--top-md`; com limite o cabeçalho diz "mostrando N de M" e
+  o rodapé diz quantas ficaram fora (aba `Deals`). O rodapé e a aba Summary mostram ofertas buscadas →
+  após filtros (texto dos filtros e o piso) e quantas `--chase-only`/`--opportunities-only` descartaram.
+- **Líquidas do XLSX do scanner** (`Net Margin %…`, `Lucro R$ REAL`) usam só Hub + frete: colunas
+  `Líquida` = PARCIAL e `Custos Não Informados`.
+- **Cobertura:** com provider em lote (tcgcsv) NÃO há corte por misses (o set já está em memória);
+  no caminho por oferta o corte conta CARTAS distintas, não ofertas. Set cortado com ofertas "não
+  alcançadas" NÃO é completo: desfecho `operational_failure` (`coverage_interrupted_N_not_reached`,
+  "tentar de novo").
+- **Chase** não entra em nenhum score/ordenação (só a coluna `Chase Tier`). Raridade da CT
+  inconclusiva (Promo, vazia) + referência com UM só acabamento: a regra exata NÃO muda; o motivo
+  só registra o acabamento que a referência tem.
 
 ## Scanner paralelo: Dragon Ball Super (`dbs_scanner.py`)
 

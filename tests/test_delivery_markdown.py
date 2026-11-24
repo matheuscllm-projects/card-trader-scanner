@@ -59,8 +59,8 @@ def _enriched(cfg=None):
 def test_header_exact():
     df, cfg = _enriched()
     md = pp.build_delivery_markdown(df, cfg, fx_usd_brl=5.0)
-    expected = ("| # | Margem % | CT US$ | TCG US$ | Dif | Carta | Set | "
-                "Raridade | Cond | Qtd | Vendas 30d | Vendas 90d | Flag | Links |")
+    expected = ("| # | Margem % | CT US$ | TCG US$ | Dif | Carta | Edição | Acabamento | Set | "
+                "Raridade | Cond | Qtd | Vendas 30d | Vendas 90d | Fonte ref. | Data ref. | Flag | Links |")
     assert expected in md
 
 
@@ -125,7 +125,7 @@ def test_pipe_in_text_does_not_break_table():
     # pipe escapado vira '/', cabeçalho continua com 12 colunas
     data_rows = [ln for ln in md.splitlines() if ln.startswith("| 1 |")]
     assert data_rows
-    assert data_rows[0].count("|") == 15  # 14 colunas → 15 pipes
+    assert data_rows[0].count("|") == 19  # 18 colunas (B1b: +Edição/Acabamento/Fonte/Data) → 19 pipes
 
 
 def test_flag_marks_revisar_as_validar_manual():

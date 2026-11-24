@@ -68,6 +68,7 @@ from cardtrader_scanner import (  # noqa: E402
     now_iso,
     export_xlsx,
     validation_key,
+    validation_key_from_record,
 )
 
 
@@ -115,7 +116,7 @@ def parse_checkpoint(checkpoint_path: Path) -> tuple[list[Opportunity], dict, di
             elif typ == "unpriced":
                 unpriced.append({k: v for k, v in obj.items() if k != "_type"})
             elif typ == "validation":
-                validations[f"{obj.get('product_id')}:{obj.get('seller')}"] = obj
+                validations[validation_key_from_record(obj)] = obj
             elif typ == "noref":
                 noref.append({k: v for k, v in obj.items() if k != "_type"})
             elif typ == "validation_complete":
@@ -227,8 +228,10 @@ def _reconstruct_opportunity(d: dict) -> Opportunity:
         below_threshold=d.get("below_threshold", False),
         validated_at=d.get("validated_at", "") or "",
         validation_reused=bool(d.get("validation_reused", False)),
-        edition=d.get("edition", "unl"),
-        finish=d.get("finish", "normal"),
+        edition=d.get("edition"),     # ausente (checkpoint antigo) = NÃO INFORMADA (None)
+        finish=d.get("finish"),
+        ref_data_at=d.get("ref_data_at", "") or "",
+        ref_data_label=d.get("ref_data_label", "") or "",
         ref_compatible=bool(d.get("ref_compatible", False)),
         validation_reason=d.get("validation_reason", "") or "",
     )

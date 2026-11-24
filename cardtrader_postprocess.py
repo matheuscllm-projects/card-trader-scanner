@@ -358,9 +358,8 @@ def fundamental_score(row) -> int:
     """Score derivado de 4 metricas objetivas (operador-pedido em 2026-05-16).
     Nao usa heuristicas subjetivas (iconicidade, meta competitivo, etc)."""
     score = 0
-    # Chase tier (peso 40)
-    chase_pts = {"TOP": 40, "MID": 25, "MODEST": 10, "BULK": 0}
-    score += chase_pts.get(row.get("chase_tier", "MODEST"), 0)
+    # Chase tier: FORA do score (B1b) — é só informativo (coluna `Chase Tier`), nunca ordena
+    # nem ranqueia linhas.
     # Net margin (peso 20)
     nm = row.get("net_margin", 0)
     if nm >= 0.40: score += 20
@@ -416,6 +415,10 @@ COLUMN_ALIASES = {
     "acabamento": ["acabamento","Acabamento"],
     "ref_compativel": ["ref_compativel","Ref Compatível","Ref Compativel"],
     "chase_tier": ["chase_tier","Chase Tier"],
+    # B1b: fonte e data da referência (a data é a do DADO quando a fonte expõe)
+    "price_source": ["price_source","Fonte Preço","Fonte Preco"],
+    "ref_data_at": ["ref_data_at","Data Ref."],
+    "ref_data_label": ["ref_data_label","Rótulo Data Ref.","Rotulo Data Ref."],
     "variant_low_confidence": ["variant_low_confidence","Variante Baixa Confiança","Variante Baixa Confianca","low_confidence_variant"],
 }
 
@@ -841,15 +844,35 @@ def bucket_counts(df: pd.DataFrame, cfg: DecisionConfig, extra_blocks: dict | No
     return out
 
 
-def build_summary(df: pd.DataFrame, cfg: DecisionConfig, extra_blocks: dict | None = None) -> pd.DataFrame:
+def build_summary(df: pd.DataFrame, cfg: DecisionConfig, extra_blocks: dict | None = None,
+                  scan_stats: dict | None = None) -> pd.DataFrame:
     c = bucket_counts(df, cfg, extra_blocks)
     total = len(df)
     pct = lambda n: f"{n} ({n / total * 100:.1f}%)" if total else 0  # noqa: E731
     d = _decide(df, cfg)
     lucro_compra = d.loc[d["decisao"] == "COMPRA", "lucro_liq"].sum() if "lucro_liq" in d.columns else 0
     k = cfg.costs
+    st = scan_stats or {}
+    origin = []
+    for lbl, key in (("Ofertas buscadas (CardTrader)", "listings_fetched"),
+                     ("Ofertas após filtros", "listings_after_filters")):
+        v = st.get(key)
+        try:
+            origin.append((lbl, int(float(v))))
+        except (TypeError, ValueError):
+            origin.append((lbl, "não informado (XLSX sem aba Stats)"))
+    if st.get("filtros_aplicados") is not None:
+        origin.append(("Filtros aplicados", str(st.get("filtros_aplicados"))))
+    for lbl, key in (("--chase-only descartou", "skipped_non_chase"),
+                     ("--opportunities-only descartou", "opportunities_only_descartadas")):
+        try:
+            if int(float(st.get(key) or 0)) > 0:
+                origin.append((lbl, int(float(st[key]))))
+        except (TypeError, ValueError):
+            pass
     rows = [
-        ("Total listings escaneados", total),
+        *origin,
+        ("Linhas neste relatório (precificadas + sem preço + sem ref. compatível)", total),
         ("Total deals exportados (COMPRA + REVISAR)", c["COMPRA"] + c["REVISAR"]),
         ("COMPRA", pct(c["COMPRA"])),
         ("REVISAR (zona cinza / liquidez não verificada)", pct(c["REVISAR"])),
@@ -947,8 +970,62 @@ def _safe_val(val):
 # deals que classify_decision marcou COMPRA/REVISAR (TODOS eles, até top_n).
 _DELIVERY_HEADERS = [
     "#", "Margem %", "CT US$", "TCG US$", "Dif",
-    "Carta", "Set", "Raridade", "Cond", "Qtd", "Vendas 30d", "Vendas 90d", "Flag", "Links",
+    "Carta", "Edição", "Acabamento", "Set", "Raridade", "Cond", "Qtd", "Vendas 30d", "Vendas 90d",
+    "Fonte ref.", "Data ref.", "Flag", "Links",
 ]
+
+
+def _cell_or_dash(v) -> str:
+    return "—" if v is None or (isinstance(v, float) and pd.isna(v)) or not str(v).strip() else _md_escape(v)
+
+
+def _fmt_ref_date(label, at) -> str:
+    """"dado de 2026-11-23 20:05" (data do DADO) ou "buscado em ..." (hora da busca). Nunca inventa."""
+    if at is None or (isinstance(at, float) and pd.isna(at)) or not str(at).strip():
+        return "—"
+    t = str(at).strip()[:16].replace("T", " ")
+    lbl = "" if label is None or (isinstance(label, float) and pd.isna(label)) else str(label).strip()
+    return f"{lbl or 'data'} {t}"
+
+
+def _read_scan_stats(input_path) -> dict:
+    """Aba Stats do XLSX do scanner -> {metrica: valor}. Ausente/ilegivel -> {} (XLSX antigo)."""
+    try:
+        st = pd.read_excel(input_path, sheet_name="Stats", header=None)
+    except Exception:
+        return {}
+    out = {}
+    for _, r in st.iterrows():
+        if len(r) >= 2 and pd.notna(r.iloc[0]):
+            out[str(r.iloc[0]).strip()] = r.iloc[1]
+    return out
+
+
+def _origin_lines(scan_stats: dict | None, n_priced: int) -> list[str]:
+    """De onde vêm os números: ofertas buscadas -> após filtros -> filtros aplicados (+ descartes)."""
+    st = scan_stats or {}
+
+    def num(k):
+        v = st.get(k)
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return None
+    fetched, after = num("listings_fetched"), num("listings_after_filters")
+    if fetched is None and after is None:
+        return ["_Origem dos números: Ofertas buscadas: não informado (XLSX de scanner antigo, sem a aba "
+                f"Stats); linhas neste relatório: {n_priced}._"]
+    filt = st.get("filtros_aplicados")
+    txt = f" (filtros: {filt})" if filt is not None and str(filt).strip() and str(filt) != "nan" else ""
+    out = [f"_Origem dos números: Ofertas buscadas: {fetched if fetched is not None else '?'} → após filtros: "
+           f"{after if after is not None else '?'}{txt}; linhas neste relatório (precificadas + sem preço + sem "
+           f"ref. compatível): {n_priced}._"]
+    nc, no = num("skipped_non_chase"), num("opportunities_only_descartadas")
+    if nc:
+        out.append(f"_--chase-only descartou {nc} oferta(s) antes da precificação (não aparecem em nenhuma aba)._")
+    if no:
+        out.append(f"_--opportunities-only descartou {no} oferta(s) precificada(s) abaixo do corte (não aparecem em nenhuma aba)._")
+    return out
 
 
 def _fmt_usd(v) -> str:
@@ -1361,6 +1438,7 @@ def build_delivery_markdown(
     min_ref_usd: float | None = None,
     extra_blocks: dict | None = None,
     pc_summary: dict | None = None,
+    scan_stats: dict | None = None,
 ) -> str:
     """Monta a tabela markdown de entrega (chat-first) a partir do df ENRIQUECIDO.
 
@@ -1468,12 +1546,13 @@ def build_delivery_markdown(
     if ratio_label and use_ebay:
         ratio_label = ratio_label.replace("Razão EN/", "Razão eBay-EN/").replace(
             "Razão TCG/CT", "Razão eBay/CT")
+    n_deals_total = len(deals)
     deals = deals.head(top_n) if top_n else deals
     deals = _combine_name_number(deals)  # 'card_name' vira "Nome (NNN/Total)"
 
     k = cfg.costs
     title = (
-        f"### CardTrader — entrega (top {len(deals)} por margem · margem sobre a VENDA "
+        f"### CardTrader — entrega ({'mostrando ' + str(len(deals)) + ' de ' + str(n_deals_total) if len(deals) < n_deals_total else str(len(deals)) + ' linha(s)'} por margem · margem sobre a VENDA "
         f"(ref−compra)/ref, corte {cfg.min_net_margin:.0%} · liquidez ≥{cfg.min_sales_90d} "
         f"vendas/90d e ≥{cfg.min_sales_30d}/30d)"
     )
@@ -1492,6 +1571,12 @@ def build_delivery_markdown(
             n for n in ("iof_rate", "spread_cambio_rate", "card_fee_rate", "import_tax_rate",
                         "sell_fee_rate", "frete_venda_brl") if getattr(k, n) is None) + ")._",
     ]
+    foot += _origin_lines(scan_stats, counts["ENTRADA"])
+    if len(deals) < n_deals_total:
+        foot.append(
+            f"_{n_deals_total - len(deals)} linha(s) de COMPRA/REVISAR ficaram FORA desta tabela por "
+            f"--top-md {top_n}; estão completas na aba 'Deals' do XLSX do relatório (e nas abas "
+            "'All Listings'/'Validate Manually'). O comando canônico não usa --top-md._")
     if pc_summary:
         foot.append(
             f"_PriceCharting: {pc_summary.get('consultas_unicas', 0)} consulta(s) única(s) para "
@@ -1625,12 +1710,16 @@ def build_delivery_markdown(
             reference_price(_fmt_usd(tcg_usd), row.get("link_tcg")),
             _fmt_usd(dif),
             _md_escape(row.get("card_name")),
+            _cell_or_dash(row.get("edicao")),
+            _cell_or_dash(row.get("acabamento")),
             _md_escape(row.get("set_code")),
             _md_escape(row.get("rarity")),
             _md_escape(row.get("condition")),
             _md_escape(row.get("quantity")),
             _sales_text(row.get("pc_vendas_30d"), row.get("pc_truncado")),
             _sales_text(row.get("pc_vendas_90d"), row.get("pc_truncado")),
+            _cell_or_dash(row.get("price_source")),
+            _fmt_ref_date(row.get("ref_data_label"), row.get("ref_data_at")),
             _md_escape(flag),
             _md_links_cell(row.get("link_ct"), row.get("link_tcg"),
                            row.get("pc_url") if show_pc else None,
@@ -1734,7 +1823,8 @@ def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path,
                  pc_refs: int = 0, show_ratio: bool = False,
                  min_ratio: float | None = None, ref_source: str = "tcg",
                  pc_firecrawl: int = 0, min_ref_usd: float | None = None,
-                 extra_blocks: dict | None = None) -> str:
+                 extra_blocks: dict | None = None,
+                 scan_stats: dict | None = None) -> str:
     # Run novo: nenhuma pagina/falha PC de outra coleta vaza para esta (DELIVERY_CHAT).
     pricecharting_ref.new_run()
     if pc_firecrawl > MAX_PC_FIRECRAWL:
@@ -1834,7 +1924,7 @@ def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path,
     for _name, _ex in extra_blocks.items():   # linhas sem margem: nao somem
         _write_styled(_name, _ex)
 
-    summary = build_summary(df, cfg, extra_blocks)
+    summary = build_summary(df, cfg, extra_blocks, scan_stats)
     ws = wb.create_sheet("Summary")
     for ri, row in enumerate([summary.columns.tolist()] + summary.values.tolist(), 1):
         for ci, val in enumerate(row, 1):
@@ -1860,7 +1950,8 @@ def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path,
                                  show_dh=dh_signals is not None,
                                  show_ratio=show_ratio, min_ratio=min_ratio,
                                  ref_source=ref_source, min_ref_usd=min_ref_usd,
-                                 extra_blocks=extra_blocks, pc_summary=pc_summary)
+                                 extra_blocks=extra_blocks, pc_summary=pc_summary,
+                                 scan_stats=scan_stats)
     md_path = output_path.with_suffix(".md")
     try:
         md_path.write_text(md + "\n", encoding="utf-8")
@@ -2037,7 +2128,8 @@ def main():
                  min_ratio=args.min_ratio, ref_source=args.ref_source,
                  pc_firecrawl=args.pc_firecrawl,
                  min_ref_usd=(args.min_ref_usd or None),
-                 extra_blocks=read_extra_blocks(args.input))
+                 extra_blocks=read_extra_blocks(args.input),
+                 scan_stats=_read_scan_stats(args.input))
 
 if __name__ == "__main__":
     main()
