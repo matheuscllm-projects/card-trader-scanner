@@ -907,8 +907,18 @@ def _fmt_pct(v) -> str:
         return ""
 
 
+_URL_RE = re.compile(r"https?://\S", re.IGNORECASE)
+
+
+def _valid_url(v) -> bool:
+    """True se `v` é string http(s):// com algo depois do esquema (sem diferenciar
+    maiúsculas). Critério ÚNICO da célula Links e da Flag."""
+    return isinstance(v, str) and _URL_RE.match(v.strip()) is not None
+
+
 def _md_links_cell(link_ct, link_tcg, link_pc=None, link_ebay=None) -> str:
-    """'[oferta](url_ct) · [TCG](url_tcg)[ · [PC](url_pc)]' — só inclui o que existir.
+    """'[oferta](url_ct) · [TCG](url_tcg)[ · [PC](url_pc)]'. Oferta e TCG são
+    obrigatórios: se um faltar, a célula traz "oferta: sem link"/"TCG: sem link".
 
     `link_pc` (opcional, metodologia 2026-08-28): link da página PriceCharting
     usada como referência de vendas reais — EXTRA, nunca substitui os 2 links
@@ -923,10 +933,11 @@ def _md_links_cell(link_ct, link_tcg, link_pc=None, link_ebay=None) -> str:
     parts = []
     ct = "" if link_ct is None else str(link_ct).strip()
     tcg = "" if link_tcg is None else str(link_tcg).strip()
-    if ct.startswith("http"):
-        parts.append(f"[oferta]({quote(ct, safe='%/?&=:+,*')})")
-    if tcg.startswith("http"):
-        parts.append(f"[TCG]({quote(tcg, safe='%/?&=:+,*')})")
+    # Contrato dos 2 links: o que falta aparece EXPLÍCITO (nunca URL inventada).
+    parts.append(f"[oferta]({quote(ct, safe='%/?&=:+,*')})" if _valid_url(ct)
+                 else "oferta: sem link")
+    parts.append(f"[TCG]({quote(tcg, safe='%/?&=:+,*')})" if _valid_url(tcg)
+                 else "TCG: sem link")
     pc = "" if link_pc is None else str(link_pc).strip()
     if pc.startswith("http"):
         parts.append(f"[PC]({quote(pc, safe='%/?&=:+,*')})")
@@ -1389,6 +1400,11 @@ def build_delivery_markdown(
         elif show_ebay and ebay_med is not None and pd.notna(row.get("ebay_n_sales")):
             flag = (flag + f" · eBay n={int(row.get('ebay_n_sales'))}"
                     + (f" ({row.get('ebay_span')})" if row.get("ebay_span") else "")).strip(" ·")
+        # Contrato dos 2 links: linha sem URL de oferta/TCG fica na tabela, marcada.
+        for _k, _lbl in (("link_ct", "oferta"), ("link_tcg", "TCG")):
+            _u = row.get(_k)
+            if not _valid_url(_u):
+                flag = (flag + f" · sem link {_lbl}").strip(" ·")
         cells = [
             str(rank),
             _fmt_pct(row.get("net_margin")),
