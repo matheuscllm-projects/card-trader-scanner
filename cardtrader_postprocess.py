@@ -344,6 +344,9 @@ def classify_decision(row, cfg: DecisionConfig, check_liquidity: bool = True):
         return "REVISAR", f"Margem {nm:.0%} OK mas lucro R${profit:.0f} < R${cfg.min_lucro_liq:.0f}"
     if val == "MARKUP_TIER_ANOMALOUS" or val == "ANOMALOUS_MARKUP":
         return "REVISAR", f"Markup anomalo (>45%); margem {nm:.0%}"
+    if val == "PRECO_INVALIDO":      # B1m: preço live 0/ausente/não finito na validação: visível, nunca COMPRA, nunca "sem referência"
+        return "REVISAR", (f"preço não validado (preço live inválido no checkout per-blueprint); "
+                           f"margem {nm:.0%} sobre preço cru do scan")
     if val not in ("VALIDATED_REAL", "VALIDATED_MARKUP"):
         return "REVISAR", f"Validation {val or 'ausente'}; margem {nm:.0%} (preço sem checkout real)"
     if not _is_truthy_flag(row.get("compra_inclui_hub")):   # VALIDATED sem LIVE na linha = sem preço de checkout

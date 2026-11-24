@@ -308,6 +308,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -5009,8 +5010,16 @@ class Scanner:
             o.validation_reason = ("endpoint per-blueprint não traz `first_edition`: a edição "
                                    "da oferta não pôde ser confirmada (não validada por oferta de outra edição)")
             return
-        match = (min(seller_matches, key=lambda l: l.get("price_cents", float("inf")))
-                 if seller_matches else None)
+        priced = [(listing_live_price(l), l) for l in seller_matches]
+        valid = [(p, l) for p, l in priced if p is not None]
+        if seller_matches and not valid:
+            # B1m: o vendedor TEM a cópia, mas o preço do listing é 0/ausente/não finito: falha de validação
+            # PRÓPRIA (nunca VALIDATED_*, nunca live 0,0); a linha segue visível e o postprocess manda a REVISAR.
+            o.validation_status = "PRECO_INVALIDO"
+            o.validation_reason = ("preço live inválido no listing per-blueprint (0, ausente ou não finito); "
+                                   "a oferta não foi validada pelo preço de checkout")
+            return
+        match = (min(valid, key=lambda pl: pl[0][0])[1] if valid else None)
         if not match:
             # STALE: vendedor não tem mais a cópia na MESMA condição+variante
             # que o scan achou (ou só tinha outra condição/variante).
@@ -5018,8 +5027,8 @@ class Scanner:
             return
         # Live BRL (per-blueprint sempre retorna na moeda da conta = BRL pra Matheus,
         # mas tratamos as 3 moedas pra robustez)
-        live_cents = match.get("price_cents", 0)
-        live_currency = (match.get("price_currency") or "BRL").upper()
+        live_cents, live_currency = listing_live_price(match)
+        live_currency = str(live_currency).upper()
         if live_currency == "BRL":
             live_brl = live_cents / 100.0
         elif live_currency == "EUR":
@@ -5134,7 +5143,7 @@ class Scanner:
                 self._enrich_validation(o, listings)
                 done += 1
                 # API_ERROR não é gravado: numa retomada o candidato é refeito.
-                if checkpoint is not None and o.validation_status != "API_ERROR":
+                if checkpoint is not None and o.validation_status not in ("API_ERROR", "PRECO_INVALIDO"):
                     checkpoint.write_validation(o)
             if n % VALIDATION_PROGRESS_EVERY == 0 or n == total_bp:
                 rl = getattr(self.ct, "rate_limit_hits", 0)
@@ -5149,9 +5158,19 @@ class Scanner:
         validated_real = sum(1 for o in candidates if o.validation_status == "VALIDATED_REAL")
         validated_markup = sum(1 for o in candidates if o.validation_status == "VALIDATED_MARKUP")
         stale = sum(1 for o in candidates if o.validation_status == "STALE")
-        log.info(f"v2.0: {validated_real} REAL, {validated_markup} com markup, {stale} STALE, {len(candidates) - validated_real - validated_markup - stale} outros")
+        bad_price = sum(1 for o in candidates if o.validation_status == "PRECO_INVALIDO")
+        # B1m: "REAL"/"markup" só contam com preço live VÁLIDO (nunca um VALIDATED_* com live 0/None)
+        validated_real = sum(1 for o in candidates if o.validation_status == "VALIDATED_REAL" and _live_ok(o))
+        validated_markup = sum(1 for o in candidates if o.validation_status == "VALIDATED_MARKUP" and _live_ok(o))
+        outros = len(candidates) - validated_real - validated_markup - stale - bad_price
+        log.info(f"v2.0: {validated_real} REAL, {validated_markup} com markup, {stale} STALE, "
+                 f"{bad_price} preço live inválido, {outros} outros")
+        if bad_price:
+            log.error(f"v2.0: {bad_price} oferta(s) com preço live INVÁLIDO (0/ausente/não finito) — NÃO validadas; "
+                      "seguem no XLSX com status PRECO_INVALIDO e o postprocess as manda a REVISAR")
         self.stats["v2_validated"] = validated_real + validated_markup
         self.stats["v2_stale"] = stale
+        self.stats["v2_preco_invalido"] = bad_price
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -5161,8 +5180,63 @@ class Scanner:
 #   - Aba "Stats": métricas da execução (funnel de filtragem)
 # Formatação condicional: margem >= 40% fica verde forte, <30% vermelho.
 # ══════════════════════════════════════════════════════════════════════
+def _live_ok(o) -> bool:
+    return o.live_price_brl is not None and math.isfinite(o.live_price_brl) and o.live_price_brl > 0
+
+
+def validation_exit_code(opps) -> int:
+    """B1m: 0 normalmente; 3 quando HOUVE candidatos e NENHUM teve preço live válido (validação inteira falhou)."""
+    cand = [o for o in opps if getattr(o, "validation_status", None) not in (None, "", "NOT_VALIDATED")]
+    return 3 if cand and not any(_live_ok(o) for o in cand if o.validation_status in ("VALIDATED_REAL", "VALIDATED_MARKUP")) else 0
+
+
+def print_top_opportunities(opps_by_net, validated: bool = True) -> None:
+    """Bloco 'TOP 5' do resumo. B1m: tolerante a campos None (só valida com live válido E margens/lucro REAIS)."""
+    validated_label = " (validadas v2.0)" if validated else ""
+    print(f"\n  TOP 5 OPORTUNIDADES{validated_label}:\n")
+    for i, o in enumerate(opps_by_net[:5], 1):
+        l = o.listing
+        # Frete: por default = 0 (modelo consolidação Hub depot). Mostra
+        # parêntese só quando há override via --shipping-brl > 0.
+        freight_suffix = (
+            f" c/ frete (R${o.estimated_shipping_brl:.2f})"
+            if o.estimated_shipping_brl > 0 else ""
+        )
+        print(f"  {i}. {l.card_name} ({l.set_code} {l.collector_number})")
+        real_ok = (_live_ok(o) and o.real_lucro_brl is not None and o.real_margin_pct is not None
+                   and o.real_net_margin_pct is not None)
+        if real_ok:
+            print(f"     Scan R${o.ct_price_brl:.2f} → LIVE R${o.live_price_brl:.2f}  [{o.markup_tier}]")
+            print(f"     TCG: R${o.tcg_market_brl:.2f} (${o.tcg_market_usd:.2f})  | Lucro REAL: R${o.real_lucro_brl:.2f}")
+            print(f"     Margem REAL: {o.real_margin_pct:.1%} bruta | {o.real_net_margin_pct:.1%} líquida{freight_suffix}")
+        else:
+            print(f"     CT: R${o.ct_price_brl:.2f} ({l.price_currency})  →  TCG: R${o.tcg_market_brl:.2f} (${o.tcg_market_usd:.2f})")
+            print(f"     Margem: {o.margin_pct:.1%} bruta | {o.net_margin_pct:.1%} líquida{freight_suffix}  [não validado]")
+        print(f"     Seller: {l.seller_username} ({l.seller_user_type})")
+        print(f"     Link: {l.cardtrader_url}\n")
+
+
 VALIDATION_RESUME_MAX_AGE_H = 3   # validação gravada há mais que isso não é reaproveitada
 VALIDATION_PROGRESS_EVERY = 25    # blueprints entre linhas de progresso
+
+
+def listing_live_price(listing: dict):
+    """(centavos, moeda) do listing per-blueprint, ou None se o preço é inválido.
+
+    B1m: a API REAL devolve `price: {cents, currency}` (o scan por expansão já lia assim em `_parse_listing`);
+    a validação lia `price_cents`/`price_currency` no TOPO, que não existem -> 0 -> LIVE R$ 0,00 gravado como
+    VALIDATED_REAL. O formato legado (topo) continua aceito como fallback. 0, ausente, negativo, não numérico
+    ou não finito = None (NUNCA vira 0)."""
+    price = listing.get("price")
+    if isinstance(price, dict):
+        cents, cur = price.get("cents"), price.get("currency")
+    else:
+        cents, cur = listing.get("price_cents"), listing.get("price_currency")
+    if isinstance(cents, bool) or not isinstance(cents, (int, float)):
+        return None
+    if not math.isfinite(cents) or cents <= 0:
+        return None
+    return float(cents), (cur or "BRL")
 
 
 def validation_key(o: "Opportunity") -> str:
@@ -6112,26 +6186,17 @@ def main():
     print("═" * 60)
 
     if opps_by_net:
-        validated_label = " (validadas v2.0)" if args.validate_top != 0 else ""
-        print(f"\n  TOP 5 OPORTUNIDADES{validated_label}:\n")
-        for i, o in enumerate(opps_by_net[:5], 1):
-            l = o.listing
-            # Frete: por default = 0 (modelo consolidação Hub depot). Mostra
-            # parêntese só quando há override via --shipping-brl > 0.
-            freight_suffix = (
-                f" c/ frete (R${o.estimated_shipping_brl:.2f})"
-                if o.estimated_shipping_brl > 0 else ""
-            )
-            print(f"  {i}. {l.card_name} ({l.set_code} {l.collector_number})")
-            if o.live_price_brl is not None:
-                print(f"     Scan R${o.ct_price_brl:.2f} → LIVE R${o.live_price_brl:.2f}  [{o.markup_tier}]")
-                print(f"     TCG: R${o.tcg_market_brl:.2f} (${o.tcg_market_usd:.2f})  | Lucro REAL: R${o.real_lucro_brl:.2f}")
-                print(f"     Margem REAL: {o.real_margin_pct:.1%} bruta | {o.real_net_margin_pct:.1%} líquida{freight_suffix}")
-            else:
-                print(f"     CT: R${o.ct_price_brl:.2f} ({l.price_currency})  →  TCG: R${o.tcg_market_brl:.2f} (${o.tcg_market_usd:.2f})")
-                print(f"     Margem: {o.margin_pct:.1%} bruta | {o.net_margin_pct:.1%} líquida{freight_suffix}  [não validado]")
-            print(f"     Seller: {l.seller_username} ({l.seller_user_type})")
-            print(f"     Link: {l.cardtrader_url}\n")
+        try:
+            print_top_opportunities(opps_by_net, validated=args.validate_top != 0)
+        except Exception as e:  # noqa: BLE001 — o resumo é só exibição: nunca derruba o scan (B1m)
+            log.warning(f"bloco TOP 5 não pôde ser impresso ({type(e).__name__}: {e}); o XLSX está completo")
+
+    if args.validate_top != 0 and not interrupted:
+        _vcode = validation_exit_code(opps)
+        if _vcode:
+            log.error("⛔ NENHUMA oferta teve preço live válido na validação per-blueprint — o XLSX está completo, mas "
+                      "as linhas ficam como 'preço não validado' (REVISAR). Saída com código 3.")
+            sys.exit(_vcode)
 
     if interrupted:
         log.error("⛔ Run INTERROMPIDO (Ctrl-C): planilha e resumo são PARCIAIS — "

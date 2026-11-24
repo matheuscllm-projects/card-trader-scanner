@@ -142,6 +142,7 @@ def test_d2_main_never_reduces_the_list_after_validation(tmp_path, monkeypatch):
             for i, o in enumerate(opps):
                 o.validation_status = "VALIDATED_REAL" if i % 2 == 0 else "STALE"
                 o.real_net_margin_pct = 0.01 if i % 2 == 0 else None   # validadas com líquida real BAIXA
+                o.live_price_brl = 10.0 if i % 2 == 0 else None          # B1m: VALIDATED_* exige preço live válido
         s.validate_per_blueprint = fake_validate
         return s
     monkeypatch.setattr(sc, "Scanner", wrapped)
