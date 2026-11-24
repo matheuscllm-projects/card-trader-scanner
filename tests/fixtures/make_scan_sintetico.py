@@ -19,7 +19,7 @@ COLS = ['Card Name', 'Set', 'Nº', 'Rarity', 'Condição', 'Idioma', 'Scan R$ (r
         'TCG Market (BRL)', 'TCG Market (USD)', 'Margem % (scan)', 'Margem % REAL',
         'Net Margin % (scan)', 'Net Margin % REAL', 'Lucro R$ REAL', 'Frete Est. R$', 'Qtd',
         'Foil', 'Variant', 'Seller', 'Tipo Seller', 'Hub', 'Link CardTrader', 'Link TCG',
-        'Scanned At', 'Chase Tier', 'Desconto %', 'Valorização (0-100)',
+        'Scanned At', 'Chase Tier', 'Desconto %', 'Score heurístico (raridade+idade+preço, 0-100)',
         'Valorização — Notas', 'Variante Baixa Confiança', 'Fonte Preço']
 FX = 5.5
 SETS = ["Jungle (ju)", "Fossil (fo)", "Base Set (bs)", "Neo Genesis (n1)", "Aquapolis (aq)",
@@ -53,7 +53,7 @@ def _row(i, rng, *, tcg_usd, scan_brl, live=None, number=None, variant="normal",
         'Hub': 'Yes', 'Link CardTrader': f"https://www.cardtrader.com/cards/9{i:05d}",
         'Link TCG': None if tcg_usd is None else f"https://www.tcgplayer.com/product/8{i:05d}",
         'Scanned At': '2026-01-01T00:00:00', 'Chase Tier': ['BULK', 'MODEST', 'TOP'][i % 3],
-        'Desconto %': margem, 'Valorização (0-100)': 30 + i % 20,
+        'Desconto %': margem, 'Score heurístico (raridade+idade+preço, 0-100)': 30 + i % 20,
         'Valorização — Notas': 'sintetico', 'Variante Baixa Confiança': 'Sim' if low_conf else None,
         'Fonte Preço': 'tcgcsv',
     }

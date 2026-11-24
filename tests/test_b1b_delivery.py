@@ -74,13 +74,13 @@ def test_delivery_states_where_the_numbers_come_from(tmp_path):
              "filtros_aplicados": "NM exato; idioma EN; não graduada; piso US$ 10",
              "skipped_non_chase": 7, "opportunities_only_descartadas": 3}
     md, out = _run_pp(tmp_path, [_opp(0)], stats=stats)
-    assert "Ofertas buscadas: 100" in md and "após filtros: 80" in md
+    assert "Ofertas buscadas (bruto da API: todos os idiomas e condições, antes dos filtros): 100" in md and "após filtros: 80" in md
     assert "NM exato; idioma EN; não graduada; piso US$ 10" in md
     assert "--chase-only descartou 7" in md and "--opportunities-only descartou 3" in md
     from openpyxl import load_workbook
     ws = load_workbook(out)["Summary"]
     cells = {r[0].value: r[1].value for r in ws.iter_rows(min_row=2) if r[0].value}
-    assert cells.get("Ofertas buscadas (CardTrader)") == 100
+    assert cells.get("Ofertas buscadas (CardTrader, bruto da API: todos os idiomas e condições, antes dos filtros)") == 100
     assert cells.get("Ofertas após filtros") == 80
     assert "Total listings escaneados" not in cells
 

@@ -47,7 +47,8 @@ O integrado deve chamar as fontes nesta execução, sem carregar arquivos antigo
 - Chase é informativo, nunca decide. COMPRA exige liquidez verificada no PriceCharting
   (≥5 vendas/90d e ≥1/30d, configuráveis); sem dado → REVISAR com o motivo.
 - A tabela ganha `Vendas 30d` e `Vendas 90d` (com `≥` quando é piso) antes de `Flag`; todas as
-  colunas anteriores e os dois links por linha (oferta + referência) seguem em todos os blocos.
+  colunas anteriores seguem. Toda linha tem o link de oferta; o de referência vai junto sempre que a
+  referência existe — quando não existe (bloco `Sem preço`), a célula diz `TCG: sem link`, nunca um link inventado.
 - Margem negativa fica fora da tabela (aba Auditoria do XLSX); o rodapé diz quantas, e fecha a
   conta: entrada = COMPRA + REVISAR + abaixo do corte + margem negativa + blocos extras.
 - Linhas das abas `Sem preço` / `Sem Ref Compatível` saem num bloco à parte, sem margem.
@@ -57,7 +58,7 @@ O integrado deve chamar as fontes nesta execução, sem carregar arquivos antigo
 ## B1b — edição, fonte e data da referência; entrega completa
 
 - A tabela ganha `Edição` e `Acabamento` (depois de `Carta`) e `Fonte ref.` e `Data ref.` (antes de
-  `Flag`). `—` = scanner antigo, não informado. Os dois links por linha seguem intactos.
+  `Flag`). `—` = scanner antigo, não informado. Os dois links por linha seguem intactos nas linhas com referência.
 - `Data ref.` = data do DADO (`dado de …`: dump diário do tcgcsv, `updatedAt` do TCGplayer);
   `buscado em …` só quando a fonte não expõe a data.
 - Canônico sem `--top-md`: entrega TODAS as linhas. Com limite, o cabeçalho diz "mostrando N de M" e
@@ -65,3 +66,13 @@ O integrado deve chamar as fontes nesta execução, sem carregar arquivos antigo
 - Rodapé "Origem dos números": ofertas buscadas → após filtros, texto dos filtros e descartes de
   `--chase-only` / `--opportunities-only`.
 - `Sem Ref Compatível` com tcgcsv como fallback: uma linha só, com os dois motivos (um por fonte).
+
+## B1c — correções da revisão
+
+- `Data ref.` mostra o fuso (`dado de 2026-11-23 17:05 (UTC-03:00)`, convertido ao horário local); XLSX antigo com só
+  `Ref. Data/Hora` mostra `buscado em …`. O rodapé `Fontes das referências` diz a fonte de cada linha, que o tcgcsv
+  é um lote diário e a idade do lote no momento do scan.
+- Bloco `Sem preço`: ganha Vendedor, Qtd, CT R$ e Edição/Acab. (44 linhas do mesmo produto deixam de ser idênticas).
+- O scanner não remove linha por margem depois de validar; `--min-net-margin` só marca. O corte único é do postprocess.
+- Falha de infraestrutura no fallback tcgcsv = `Sem preço` (falha operacional) e set `operational_failure`
+  ("tentar de novo"), nunca `Sem Ref Compatível` definitivo.

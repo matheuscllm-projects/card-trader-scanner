@@ -591,7 +591,7 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
   **neste run**, correspondência exata de edição e acabamento). Cada linha leva `Fonte Preço` e
   `Ref. Data/Hora`. Resgate parcial **nunca** é "completo".
 - **Nada some:** listings sem preço vão para a aba **"Sem preço"** do XLSX
-  (motivo: `sem_cobertura`, `falha_operacional` ou `nao_alcancado`) e contam em
+  (motivo: `sem_referencia_na_fonte`, `falha_operacional` ou `nao_alcancado`) e contam em
   `Stats` (`sets_operational_failure`, `sets_no_coverage`, `listings_sem_preco`).
 
 ---

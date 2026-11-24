@@ -417,7 +417,7 @@ COLUMN_ALIASES = {
     "chase_tier": ["chase_tier","Chase Tier"],
     # B1b: fonte e data da referência (a data é a do DADO quando a fonte expõe)
     "price_source": ["price_source","Fonte Preço","Fonte Preco"],
-    "ref_data_at": ["ref_data_at","Data Ref."],
+    "ref_data_at": ["ref_data_at","Data Ref.","Ref. Data/Hora"],   # antigo: hora da busca ("buscado em")
     "ref_data_label": ["ref_data_label","Rótulo Data Ref.","Rotulo Data Ref."],
     "variant_low_confidence": ["variant_low_confidence","Variante Baixa Confiança","Variante Baixa Confianca","low_confidence_variant"],
 }
@@ -854,7 +854,7 @@ def build_summary(df: pd.DataFrame, cfg: DecisionConfig, extra_blocks: dict | No
     k = cfg.costs
     st = scan_stats or {}
     origin = []
-    for lbl, key in (("Ofertas buscadas (CardTrader)", "listings_fetched"),
+    for lbl, key in (("Ofertas buscadas (CardTrader, bruto da API: todos os idiomas e condições, antes dos filtros)", "listings_fetched"),
                      ("Ofertas após filtros", "listings_after_filters")):
         v = st.get(key)
         try:
@@ -979,13 +979,68 @@ def _cell_or_dash(v) -> str:
     return "—" if v is None or (isinstance(v, float) and pd.isna(v)) or not str(v).strip() else _md_escape(v)
 
 
+def _parse_dt(at):
+    """ISO -> datetime (ou None). Com fuso: convertido p/ o fuso LOCAL de quem lê."""
+    from datetime import datetime as _dt
+    try:
+        d = _dt.fromisoformat(str(at).strip())
+    except ValueError:
+        return None
+    return d.astimezone() if d.tzinfo else d
+
+
 def _fmt_ref_date(label, at) -> str:
-    """"dado de 2026-11-23 20:05" (data do DADO) ou "buscado em ..." (hora da busca). Nunca inventa."""
+    """"dado de 2026-11-23 17:05 (UTC-03:00)" (data do DADO) ou "buscado em ..." (hora da busca,
+    também o rótulo quando a coluna é a antiga "Ref. Data/Hora"). Mostra SEMPRE o fuso quando o
+    valor o tem (convertido ao horário local). Nunca inventa."""
     if at is None or (isinstance(at, float) and pd.isna(at)) or not str(at).strip():
         return "—"
-    t = str(at).strip()[:16].replace("T", " ")
     lbl = "" if label is None or (isinstance(label, float) and pd.isna(label)) else str(label).strip()
-    return f"{lbl or 'data'} {t}"
+    lbl = lbl or "buscado em"
+    d = _parse_dt(at)
+    if d is None:
+        return f"{lbl} {str(at).strip()[:16].replace('T', ' ')}"
+    if d.tzinfo:
+        off = d.strftime("%z")
+        tz = "UTC" if off in ("+0000", "") else f"UTC{off[:3]}:{off[3:]}"
+        return f"{lbl} {d.strftime('%Y-%m-%d %H:%M')} ({tz})"
+    return f"{lbl} {d.strftime('%Y-%m-%d %H:%M')} (fuso não informado)"
+
+
+def _sources_line(df: pd.DataFrame, scan_stats: dict | None) -> str:
+    """Rodapé: fonte de cada referência, natureza do lote (tcgcsv = dump diário) e a idade do
+    lote usado NESTE scan (relativa à hora do scan, não a hoje)."""
+    if df is None or "price_source" not in df.columns:
+        return ""
+    ref_at = df["ref_data_at"] if "ref_data_at" in df.columns else None
+    lbl = df["ref_data_label"] if "ref_data_label" in df.columns else None
+    sa = (scan_stats or {}).get("scanned_at")
+    scan_dt = _parse_dt(sa) if sa else None
+    from datetime import datetime as _dt
+    ref_now = scan_dt or _dt.now().astimezone()
+    parts = []
+    for src, g in df.groupby(df["price_source"].fillna("—").astype(str)):
+        txt = f"{src}: {len(g)} linha(s)"
+        if src == "tcgcsv":
+            txt += " — lote diário (preço do TCGplayer congelado uma vez por dia)"
+        dts = []
+        if ref_at is not None:
+            for k in g.index:
+                lv = lbl.get(k) if lbl is not None else None
+                if str(lv or "").strip() != "dado de":
+                    continue
+                v = ref_at.get(k)
+                d = _parse_dt(v) if pd.notna(v) else None
+                if d is not None and d.tzinfo:
+                    dts.append(d)
+        if dts:
+            old = min(dts)
+            hrs = max(0.0, (ref_now - old).total_seconds() / 3600)
+            txt += f"; dado publicado há {hrs:.0f} h no momento do scan ({_fmt_ref_date('dado de', old.isoformat())})"
+        else:
+            txt += "; sem data do dado (só a hora da busca)"
+        parts.append(txt)
+    return "_Fontes das referências: " + " | ".join(parts) + "._" if parts else ""
 
 
 def _read_scan_stats(input_path) -> dict:
@@ -1017,7 +1072,8 @@ def _origin_lines(scan_stats: dict | None, n_priced: int) -> list[str]:
                 f"Stats); linhas neste relatório: {n_priced}._"]
     filt = st.get("filtros_aplicados")
     txt = f" (filtros: {filt})" if filt is not None and str(filt).strip() and str(filt) != "nan" else ""
-    out = [f"_Origem dos números: Ofertas buscadas: {fetched if fetched is not None else '?'} → após filtros: "
+    out = [f"_Origem dos números: Ofertas buscadas (bruto da API: todos os idiomas e condições, antes dos "
+           f"filtros): {fetched if fetched is not None else '?'} → após filtros: "
            f"{after if after is not None else '?'}{txt}; linhas neste relatório (precificadas + sem preço + sem "
            f"ref. compatível): {n_priced}._"]
     nc, no = num("skipped_non_chase"), num("opportunities_only_descartadas")
@@ -1399,15 +1455,18 @@ def _extra_blocks_markdown(extra_blocks) -> str:
         c_mot = col("Motivo", "motivo")
         c_ct, c_tcg = col("Link CardTrader", "Link CT", "link_ct"), col("Link TCG", "link_tcg")
         c_ed, c_ac = col("Edição", "edicao"), col("Acabamento", "acabamento")
+        c_sel, c_brl = col("Seller", "Vendedor", "seller"), col("CT R$", "ct_price_brl")
         out += [f"\n\n### {name} — {len(ex)} linha(s), sem margem (não é recomendação)",
-                "", "| # | Carta | Set | Edição/Acab. | Qtd | Motivo | Links |",
-                "| --- | --- | --- | --- | --- | --- | --- |"]
+                "", "| # | Carta | Set | Edição/Acab. | Qtd | Vendedor | CT R$ | Motivo | Links |",
+                "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
         for i, (_, r) in enumerate(ex.iterrows(), 1):
             g = lambda c: _md_escape(r.get(c)) if c else ""  # noqa: E731
             nm = f"{g(c_name)} ({g(c_num)})" if c_num and g(c_num) else g(c_name)
             ed = " · ".join(x for x in (g(c_ed), g(c_ac)) if x)
-            out.append(f"| {i} | {nm} | {g(c_set)} | {ed} | {g(c_qtd)} | "
-                       f"{g(c_mot) or name} | "
+            brl = r.get(c_brl) if c_brl else None
+            brl = "" if brl is None or (isinstance(brl, float) and pd.isna(brl)) else f"{float(brl):.2f}"
+            out.append(f"| {i} | {nm} | {g(c_set)} | {ed or '—'} | {g(c_qtd) or '—'} | {g(c_sel) or '—'} | "
+                       f"{brl or '—'} | {g(c_mot) or name} | "
                        f"{_md_links_cell(r.get(c_ct) if c_ct else None, r.get(c_tcg) if c_tcg else None)} |")
     return "\n".join(out)
 
@@ -1572,6 +1631,9 @@ def build_delivery_markdown(
                         "sell_fee_rate", "frete_venda_brl") if getattr(k, n) is None) + ")._",
     ]
     foot += _origin_lines(scan_stats, counts["ENTRADA"])
+    _src = _sources_line(df, scan_stats)
+    if _src:
+        foot.append(_src)
     if len(deals) < n_deals_total:
         foot.append(
             f"_{n_deals_total - len(deals)} linha(s) de COMPRA/REVISAR ficaram FORA desta tabela por "

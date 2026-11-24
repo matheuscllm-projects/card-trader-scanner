@@ -240,7 +240,7 @@ def test_partial_rescue_is_never_complete_and_rows_are_kept(tmp_path, monkeypatc
     assert len(opps) == 3
     assert done[0]["status"] == "complete_with_unpriced" and done[0]["unpriced"] == 1, done
     kept = [r for r in scanner.unpriced_rows if r["card"] == "Card 4"]
-    assert len(kept) == 1 and kept[0]["reason"] == "sem_cobertura", scanner.unpriced_rows
+    assert len(kept) == 1 and kept[0]["reason"] == "sem_referencia_na_fonte", scanner.unpriced_rows
     assert kept[0]["link"].startswith("https://"), kept
 
 

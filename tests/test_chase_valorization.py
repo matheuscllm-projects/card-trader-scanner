@@ -156,7 +156,7 @@ def test_xlsx_has_new_columns_at_end(tmp_path):
     ws = wb["Oportunidades"]
     headers = [c.value for c in ws[1]]
     # Novas colunas existem.
-    for h in ["Chase Tier", "Desconto %", "Valorização (0-100)", "Valorização — Notas"]:
+    for h in ["Chase Tier", "Desconto %", "Score heurístico (raridade+idade+preço, 0-100)", "Valorização — Notas"]:
         assert h in headers, f"coluna {h} ausente: {headers}"
     # E estão NO FIM (depois de Scanned At) — não deslocaram as antigas.
     assert headers.index("Scanned At") < headers.index("Chase Tier")
@@ -175,7 +175,7 @@ def test_xlsx_new_column_values(tmp_path):
     headers = [c.value for c in ws[1]]
     row = [c.value for c in ws[2]]
     assert row[headers.index("Chase Tier")] == "TOP"
-    assert row[headers.index("Valorização (0-100)")] == 100
+    assert row[headers.index("Score heurístico (raridade+idade+preço, 0-100)")] == 100
     assert abs(row[headers.index("Desconto %")] - 0.50) < 1e-9
     wb.close()
 

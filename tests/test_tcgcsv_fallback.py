@@ -405,7 +405,7 @@ def test_e_fallback_consulted_for_misses_even_when_pokemontcg_has_hit():
     # miss do fim do set oferecido ao tcgcsv: /groups + /products + /prices
     assert [c.args[0].rsplit("/", 1)[-1] for c in tcgcsv.session.get.call_args_list]         == ["groups", "products", "prices"]
     assert scanner.stats["tcgcsv_fallback_sets"] == 0  # nada resgatado
-    assert [(r["card"], r["reason"]) for r in scanner.unpriced_rows]         == [("Card B", "sem_cobertura")]
+    assert [(r["card"], r["reason"]) for r in scanner.unpriced_rows]         == [("Card B", "sem_referencia_na_fonte")]
 
 
 def test_a_opt_out_disables_fallback():

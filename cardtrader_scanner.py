@@ -1544,8 +1544,8 @@ class PricingProvider(ABC):
                             if c[1] != ct_variants.FIN_REVERSE)
             if len(nonrev) == 1:
                 self.last_ref_reason += (
-                    f" — raridade CT {rarity!r} inconclusiva p/ holo; a referência só tem o acabamento "
-                    f"{nonrev[0]} (isso não autoriza casar)")
+                    f" — raridade CT {rarity!r} inconclusiva p/ holo; a referência só tem a chave de preço "
+                    f"{nonrev[0]} (edição+acabamento; isso não autoriza casar)")
 
     @abstractmethod
     def market_price_usd(self, card_name: str, set_code: str,
@@ -1920,6 +1920,18 @@ class PokemonTcgIoProvider(PricingProvider):
     }
 
     def _search(self, card_name: str, set_code: str, number: str) -> Optional[dict]:
+        """B1c: memoriza DENTRO do run (nunca entre runs) o resultado de uma resposta VÁLIDA da
+        fonte, inclusive "não encontrada": ofertas repetidas da mesma carta não refazem a busca.
+        Exceção de infraestrutura (timeout/5xx) propaga e NÃO é guardada como "não encontrada"."""
+        memo = self.__dict__.setdefault("_search_memo", {})
+        key = (card_name, (set_code or "").lower(), str(number))
+        if key in memo:
+            return memo[key]
+        card = self._search_uncached(card_name, set_code, number)
+        memo[key] = card
+        return card
+
+    def _search_uncached(self, card_name: str, set_code: str, number: str) -> Optional[dict]:
         """Busca carta e retorna o primeiro match.
         Estratégia em cascata: primeiro tenta com set.id (mais específico, menor
         risco de falso-match entre reprints). Se retornar 0, tenta sem set.id
@@ -3538,12 +3550,16 @@ class Scanner:
         for l in listings:
             accounted.add(l.uid)
             cause = causes.get(l.uid, "not_reached")
-            reason = {"miss": "sem_cobertura", "failure": "falha_operacional",
+            reason = {"miss": "sem_referencia_na_fonte", "failure": "falha_operacional",
                       "not_reached": "nao_alcancado"}.get(cause, cause)
+            ed, fin = ct_variants.offer_variant(
+                l.first_edition, bool(l.foil), ct_variants.rarity_is_holo(l.rarity))
             row = {
                 "set": exp_code, "set_name": l.set_name, "card": l.card_name,
                 "number": l.collector_number, "ct_price_brl": round(l.price_brl, 2),
                 "seller": l.seller_username, "link": l.cardtrader_url,
+                "qty": l.quantity, "edicao": ct_variants.edition_label(ed, False),
+                "acabamento": ct_variants.FIN_LABELS.get(fin, fin),
                 "reason": reason,
                 "detail": (per_uid_detail or {}).get(l.uid) or detail or "",
             }
@@ -4213,7 +4229,7 @@ class Scanner:
         self.stats["filtros_aplicados"] = (
             f"NM exato (Near Mint); idioma {str(getattr(self, 'language', 'en')).upper()}; "
             f"{'não graduada' if self.exclude_graded else 'graduadas INCLUÍDAS'}; sem Trainer/Galarian Gallery (TG/GG); "
-            f"piso de preço US$ {self.min_price_usd:g}")
+            f"piso de preço US$ {self.min_price_usd:g}; deduplicação por oferta (mesmo produto+vendedor)")
         self.noref_rows: list[dict] = []     # B1: ofertas sem referência compatível
         self.stats.setdefault("listings_sem_ref_compativel", 0)
         for idx, exp in enumerate(expansions, 1):
@@ -4703,7 +4719,7 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
         # 26, 27). Chase Tier = raridade top (TOP/MID/MODEST/BULK). Desconto %
         # = margem bruta repetida com rótulo do ranking de chase. Valorização =
         # score heurístico 0-100 (rarity + idade do set + preço) + notas.
-        "Chase Tier", "Desconto %", "Valorização (0-100)", "Valorização — Notas",
+        "Chase Tier", "Desconto %", "Score heurístico (raridade+idade+preço, 0-100)", "Valorização — Notas",
         # v2.14 (candidato 4): flag de baixa confiança de variante. APPEND no
         # FIM (não realocar — testes de coerência checam índices fixos).
         "Variante Baixa Confiança",
@@ -4882,11 +4898,12 @@ def export_xlsx(opportunities: list[Opportunity], stats: dict,
     if unpriced:
         ws3 = wb.create_sheet("Sem preço")
         ws3.append(["Set", "Nome do set", "Carta", "Nº", "CT R$", "Seller",
-                    "Link CardTrader", "Motivo", "Detalhe"])
+                    "Link CardTrader", "Motivo", "Detalhe", "Qtd", "Edição", "Acabamento"])
         for r in unpriced:
             ws3.append([r.get("set"), r.get("set_name"), r.get("card"), r.get("number"),
                         r.get("ct_price_brl"), r.get("seller"), r.get("link"),
-                        r.get("reason"), r.get("detail")])
+                        r.get("reason"), r.get("detail"), r.get("qty"), r.get("edicao"),
+                        r.get("acabamento")])
         for cell in ws3[1]:
             cell.fill = header_fill
             cell.font = header_font
