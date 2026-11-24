@@ -344,6 +344,7 @@ def test_attach_pc_refs_uses_injected_resolver_and_caps():
 
 def test_delivery_with_pc_columns_and_link():
     df, cfg = _pc_enriched()
+    df["reference_price_usd"] = pcr.median_ungraded_sold(_LUGIA)[0]      # B1k: referências coerentes (senão divergem = REVISAR)
 
     def dem(name, number, set_label, *, edition, cache_dir=None, variant=None):
         if name == "Plusle":

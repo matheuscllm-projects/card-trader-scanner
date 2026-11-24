@@ -221,6 +221,7 @@ class DecisionConfig:
     min_sales_90d: int = 5               # liquidez: vendas ungraded em 90d (valor do dono, configuravel)
     min_sales_30d: int = 1               # liquidez: ao menos 1 venda em 30d (idem)
     max_ref_age_days: float = 7.0        # idade maxima da referencia (DEFAULT provisorio; o valor definitivo e do dono)
+    max_ref_divergence: float = 0.30     # B1k: TCG x PriceCharting alem disso (sobre a MAIOR das duas) nunca e COMPRA
     costs: Costs = Costs()               # Hub 6% + frete R$0,50/carta; demais = nao informado
 
     @property
@@ -237,6 +238,15 @@ def _num(v):
         return None
 
 
+def _fmt_status_counts(d) -> str:
+    return ", ".join(f"{k} {v}" for k, v in sorted((d or {}).items(), key=lambda kv: (-kv[1], kv[0]))) or "—"
+
+
+def ref_divergence(a, b) -> float:
+    """B1k: divergencia relativa entre duas referencias, sobre a MAIOR (simetrica)."""
+    return abs(a - b) / max(a, b)
+
+
 def _is_reverse_offer(row) -> bool:
     """Unica fonte da decisao: pricecharting_ref.finish_status (variante OU acabamento)."""
     return any(pricecharting_ref.finish_status(row.get(k)) == pricecharting_ref.FINISH_REVERSE_NAO_CONFIRMAVEL
@@ -251,6 +261,7 @@ def _truncado(v):
 _PC_STATUS_TEXT = {
     "EDICAO_NAO_INFORMADA": "edição não informada",
     "LIMITE_CONSULTAS": "limite de consultas PriceCharting (--pc-refs) esgotado antes desta referência",
+    "NAO_CONSULTADO_ORCAMENTO": "não consultado: orçamento de créditos Firecrawl esgotado",
 }
 
 
@@ -360,6 +371,20 @@ def classify_decision(row, cfg: DecisionConfig, check_liquidity: bool = True):
     if age > cfg.max_ref_age_days:
         return "REVISAR", (f"referência desatualizada ({age:.0f} dias); máximo {cfg.max_ref_age_days:g}; "
                            f"margem {nm:.0%} sobre preço velho")
+    # B1k: com PriceCharting COMPATIVEL (mesma edicao/acabamento, ungraded) as duas referencias precisam concordar
+    # e a margem tem de passar o corte tambem pela MENOR delas. Sem PC compativel vale so a regra de liquidez.
+    tcg_usd, pc_usd = _num(row.get("reference_price_usd")), _num(row.get("pc_median_usd"))
+    if tcg_usd and pc_usd and tcg_usd > 0 and pc_usd > 0:
+        div = ref_divergence(tcg_usd, pc_usd)
+        if div > cfg.max_ref_divergence:
+            return "REVISAR", (f"referências divergem: TCG US${tcg_usd:.2f} x PC US${pc_usd:.2f} "
+                               f"({div:.0%} sobre a maior; limite {cfg.max_ref_divergence:.0%}); margem {nm:.0%} "
+                               f"só vale pela referência TCG")
+        if pc_usd < tcg_usd:
+            m_low = 1 - (1 - nm) * tcg_usd / pc_usd
+            if m_low < cfg.min_net_margin:
+                return "REVISAR", (f"margem pela menor referência (PC US${pc_usd:.2f}) {m_low:.0%} < corte "
+                                   f"{cfg.min_net_margin:.0%}; pela TCG US${tcg_usd:.2f} seria {nm:.0%}")
     if not check_liquidity:
         return "COMPRA", ""
     ok, liq = liquidity_verdict(row, cfg)
@@ -643,6 +668,17 @@ def enrich_df(raw_df: pd.DataFrame, hub_fee_rate: float | None = None,
             df["net_margin"] = scan_net
         else:
             df["net_margin"] = pd.to_numeric(df["net_margin"], errors="coerce").fillna(scan_net)
+    # B1k: a margem do INPUT que se compara com ct_economics é a BRUTA sobre a venda (mesma função, mesma base):
+    # "Margem % REAL" (checkout) e, onde falta, "Margem % (scan)". "Net Margin %…" é a LÍQUIDA parcial (Hub+frete) e
+    # só vale como fallback de XLSX antigo (sem as colunas brutas) — é daí que vinha o drift de 13pp.
+    g_real = next((c for c in raw_df.columns if str(c).strip() == "Margem % REAL"), None)
+    g_scan = next((c for c in raw_df.columns if str(c).strip() == "Margem % (scan)"), None)
+    if g_real is not None or g_scan is not None:
+        gross = (pd.to_numeric(raw_df[g_real], errors="coerce") if g_real is not None
+                 else pd.Series(float("nan"), index=raw_df.index))
+        if g_scan is not None:
+            gross = gross.fillna(pd.to_numeric(raw_df[g_scan], errors="coerce"))
+        df["net_margin"] = gross.values
     df = _recompute_margin_with_fee(df, costs=costs)
     # TG##/GG## gallery flag (Trainer + Galarian Gallery — mesma inflação pokemontcg.io)
     if "card_number" in df.columns:
@@ -725,7 +761,7 @@ def _sales_text(v, truncado) -> str:
 _SHEET_COLS = ["decisao", "porque", "ref_age_dias", "ref_desatualizada", "ref_swap", "ref_inferido", "chase_tier", "fundamental_score",
                "dh_score",  # 2ª opinião DoubleHolo (só se --doubleholo; senão ausente)
                "pc_median_usd", "pc_n_sales", "pc_url",  # Ref PC (só se --pc-refs)
-               "pc_status", "edicao", "acabamento",
+               "pc_status", "pc_motivo", "edicao", "acabamento",
                "set_code", "card_name", "card_number", "language",
                "live_brl", "reference_price_brl", "net_margin", "lucro_liq",
                "roi_aquisicao", "lucro_liquido_parcial", "margem_liquida_parcial",
@@ -736,7 +772,7 @@ _SHEET_RENAME = {
     "decisao": "Decisão", "porque": "Porque", "chase_tier": "Chase Tier (info)",
     "fundamental_score": "Score", "dh_score": "DH", "set_code": "Set", "card_name": "Carta",
     "pc_median_usd": "Ref PC (US$)", "pc_n_sales": "PC Nº Vendas", "pc_url": "Link PC",
-    "pc_status": "PC Status", "edicao": "Edição", "acabamento": "Acabamento",
+    "pc_status": "PC Status", "pc_motivo": "PC Motivo", "edicao": "Edição", "acabamento": "Acabamento",
     "card_number": "Nº", "language": "Idioma", "live_brl": "Preço CT (R$)",
     "reference_price_brl": "TCG (R$)", "net_margin": MARGIN_COL,
     "lucro_liq": "Lucro bruto (R$)", "roi_aquisicao": "ROI aquisição % (info)",
@@ -1382,6 +1418,7 @@ def attach_pc_refs(df: pd.DataFrame, cfg: DecisionConfig, top_md: int,
         if keys[i] not in order:
             order.append(keys[i])
     ok = served = 0
+    por_status: dict = {}
     lim = max(0, int(limit))
     cortadas = set(order[lim:])   # referencias cobertas pelo criterio mas sem orcamento de consulta
     n_lim_linhas = 0
@@ -1404,6 +1441,9 @@ def attach_pc_refs(df: pd.DataFrame, cfg: DecisionConfig, top_md: int,
                 med, n_med = pricecharting_ref.median_ungraded_sold(fetch(res["pc_url"], cache_dir=cache_dir))
             except Exception:  # noqa: BLE001 — mediana e extra; a liquidez ja foi lida
                 med = None
+        if res.get("pc_status") == "INDISPONIVEL_ORCAMENTO":      # teto de créditos: a página NÃO foi consultada
+            res = {**res, "pc_status": "NAO_CONSULTADO_ORCAMENTO"}
+        por_status[str(res.get("pc_status"))] = por_status.get(str(res.get("pc_status")), 0) + 1
         ok += res.get("pc_status") == "OK"
         for idx in [i for i in keys if keys[i] == key]:
             served += 1
@@ -1416,6 +1456,8 @@ def attach_pc_refs(df: pd.DataFrame, cfg: DecisionConfig, top_md: int,
                 df.at[idx, "pc_n_sales"] = n_med
     df.attrs["pc_stats"] = {"consultas_unicas": min(len(order), lim),
                             "linhas_atendidas": served,
+                            "consultas_duplicadas_evitadas": max(0, served - min(len(order), lim)),
+                            "por_status": dict(por_status),
                             "sem_consulta_limite_refs": len(cortadas),
                             "sem_consulta_limite_linhas": n_lim_linhas}
     return ok, df.attrs["pc_stats"]["consultas_unicas"]
@@ -1701,7 +1743,9 @@ def build_delivery_markdown(
     if pc_summary:
         foot.append(
             f"_PriceCharting: {pc_summary.get('consultas_unicas', 0)} consulta(s) única(s) para "
-            f"{pc_summary.get('linhas_atendidas', 0)} linha(s) atendida(s); "
+            f"{pc_summary.get('linhas_atendidas', 0)} linha(s) atendida(s) "
+            f"({pc_summary.get('consultas_duplicadas_evitadas', 0)} consulta(s) duplicada(s) evitada(s)); "
+            f"por status: {_fmt_status_counts(pc_summary.get('por_status'))}; "
             f"{pc_summary.get('firecrawl_creditos_gastos', 0)} crédito(s) Firecrawl de "
             f"{pc_summary.get('firecrawl_teto', 0)} liberados._")
         if pc_summary.get("sem_consulta_limite_refs"):
@@ -1810,8 +1854,8 @@ def build_delivery_markdown(
             pc_med = None
         pc_margin = ((pc_med - ct_usd) / pc_med
                      if (pc_med and ct_usd is not None) else None)
-        if (show_pc and pc_med and tcg_usd is not None
-                and abs(tcg_usd - pc_med) / pc_med > PC_DIVERGENCE_RATIO):
+        if (show_pc and pc_med and tcg_usd is not None and tcg_usd > 0
+                and ref_divergence(tcg_usd, pc_med) > PC_DIVERGENCE_RATIO):
             flag = (flag + " · PC diverge").strip(" ·")
         ebay_med = _ebay_usd(row) if show_ebay else None
         if show_ratio and use_ebay and ebay_med is None:
@@ -1984,7 +2028,9 @@ def write_report(df: pd.DataFrame, cfg: DecisionConfig, output_path: Path,
                                              cache_dir=pc_cache)
         pc_summary = {**df.attrs.get("pc_stats", {}), **pricecharting_ref.run_summary()}
         print(f"[PC] {resolved}/{attempted} consulta(s) única(s) com página compatível; "
-              f"{pc_summary.get('linhas_atendidas', 0)} linha(s) atendida(s); "
+              f"{pc_summary.get('linhas_atendidas', 0)} linha(s) atendida(s) "
+              f"({pc_summary.get('consultas_duplicadas_evitadas', 0)} consulta(s) duplicada(s) evitada(s)); "
+              f"por status: {_fmt_status_counts(pc_summary.get('por_status'))}; "
               f"{pc_summary['firecrawl_creditos_gastos']} crédito(s) Firecrawl de "
               f"{pc_summary['firecrawl_teto']} liberados.")
     # Caminho 1 DoubleHolo: anexa a coluna `dh_score` (2ª opinião). Só quando
@@ -2113,6 +2159,10 @@ def build_parser():
                    help=("B1f: idade máxima (dias) do dado da referência; linha mais velha leva a marca "
                          "'referência desatualizada (N dias)' e nunca sai COMPRA (vai a REVISAR; a margem "
                          "continua exibida). Default 7 é PROVISÓRIO: o valor definitivo é do dono."))
+    p.add_argument("--max-ref-divergence", type=float, default=0.30,
+                   help=("B1k: divergência máxima entre a referência TCG e a mediana PriceCharting compatível, em FRAÇÃO "
+                         "da MAIOR das duas (default 0.30). Acima disso a linha nunca é COMPRA (vai a REVISAR, 'referências "
+                         "divergem'); além disso a margem tem de passar o corte também pela MENOR referência."))
     p.add_argument("--min-sales-90d", type=int, default=5,
                    help="Liquidez: minimo de vendas ungraded nos ultimos 90 dias na pagina "
                         "PriceCharting da mesma edicao (default 5; configuravel). "
@@ -2199,6 +2249,8 @@ def build_parser():
 def main():
     parser = build_parser()
     args = parser.parse_args()
+    if not (0 < args.max_ref_divergence < 1):
+        parser.error("--max-ref-divergence deve ser uma fração entre 0 e 1 (exclusive)")
     if not (args.max_ref_age_days > 0) or args.max_ref_age_days == float("inf"):
         parser.error("--max-ref-age-days deve ser um número finito > 0")
 
@@ -2225,6 +2277,7 @@ def main():
         min_sales_90d=args.min_sales_90d,
         min_sales_30d=args.min_sales_30d,
         max_ref_age_days=args.max_ref_age_days,
+        max_ref_divergence=args.max_ref_divergence,
         costs=costs,
     )
     df = pd.read_excel(args.input)
