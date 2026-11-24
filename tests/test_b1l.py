@@ -81,3 +81,22 @@ def test_price_cache_key_changes_with_b1l_logic_version():
     import ct_variants as cv
     k = cv.price_cache_key("neo1", "9", "Lugia", False, False, True)
     assert k.startswith("pokemontcg:4:") and ":3:" not in k.split("neo1")[0]
+
+
+# ───────── (4) denominador declarado que contradiz TODOS os candidatos = ambiguo (nome nao desempata) ─────────
+_MEW = [{"name": "Mew", "number": "08/53"}, {"name": "Mew - 8 (Glossy Finish)", "number": "8"}]
+
+
+def test_declared_denominator_contradicting_all_candidates_is_ambiguous():
+    import ct_variants as cv
+    chosen, why = cv.resolve_candidates(_MEW, "mew", "8/100")
+    assert chosen is None and "ambígua" in why
+
+
+def test_matching_denominator_still_resolves_and_exact_name_without_denominator_needs_one_candidate():
+    import ct_variants as cv
+    assert cv.resolve_candidates(_MEW, "Mew", "8/53")[0] is _MEW[0]
+    assert cv.resolve_candidates(_MEW, "  MEW ", "8")[0] is _MEW[0]                 # nome exato (caixa/espacos), unico
+    assert cv.resolve_candidates(_MEW, "Mew - 8", "8")[0] is None                  # prefixo/substring nunca
+    dup = [{"name": "Mew", "number": "8"}, {"name": "mew", "number": "08"}]
+    assert cv.resolve_candidates(dup, "Mew", "8")[0] is None                       # 2 nomes identicos = ambiguo

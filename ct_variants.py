@@ -482,7 +482,8 @@ def resolve_candidates(cands: list, card_name, collector_number):
     """Vários PRODUTOS da referência com a mesma chave (numerador). Devolve (candidato|None, motivo).
 
     Só casa se um dado DECLARADO da oferta desempata de forma inequívoca: (1) número COMPLETO com
-    denominador igual ao do produto; (2) nome EXATO do produto. Critérios que apontam produtos diferentes,
+    denominador igual ao do produto; (2) nome EXATO do produto (igualdade após caixa/espaços, sem prefixo/substring); denominador declarado que
+    contradiz todos os candidatos = ambígua. Critérios que apontam produtos diferentes,
     ou que não reduzem a lista a exatamente um, = ambígua. Nunca ordem de chegada, preço ou nome parcial."""
     n = len(cands)
     if n <= 1:
@@ -493,6 +494,10 @@ def resolve_candidates(cands: list, card_name, collector_number):
         a = [c for c in cands if "/" in str(c.get("number") or "") and _full_number(c.get("number")) == off_num]
         if a:
             lists.append(a)
+        elif off_num[1] is not None:   # B1l: denominador declarado contradiz TODOS os candidatos -> o nome nao desempata
+            names = "; ".join(f"{c.get('name')} [{c.get('number')}]" for c in cands[:4])
+            return None, (f"referência ambígua: o denominador declarado ({collector_number}) não confere com nenhum "
+                          f"dos {n} produtos ({names}{'…' if n > 4 else ''})")
     b = [c for c in cands if _norm_name(c.get("name")) == _norm_name(card_name)]
     if b:
         lists.append(b)
