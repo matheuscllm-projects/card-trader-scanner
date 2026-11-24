@@ -648,6 +648,31 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
   inconclusiva (Promo, vazia) + referência com UM só acabamento: a regra exata NÃO muda; o motivo
   só registra o acabamento que a referência tem.
 
+### B1e/B1f — disjuntor da fonte, idade da referência, conflito de rótulo
+
+- **Disjuntor da fonte principal (pokemontcg.io → tcgcsv em lote):** o scanner mede a saúde da fonte
+  POR OFERTA (janela das últimas N: falha de infra — 5xx, timeout, 4xx≠429 — ou oferta que só respondeu
+  depois de retry 5xx — e latência). Passou do limite = fonte degradada: o resto do set e os sets
+  seguintes vão direto ao tcgcsv (mesma regra exata); uma sonda barata (consulta de carta real) decide
+  quando voltar. Nunca grava skip-list. Flags: `--source-fail-rate` (FRAÇÃO 0-1, padrão 0.5),
+  `--source-slow-s` (latência média, padrão 15 s), `--source-window` (padrão 10),
+  `--source-probe-s` (padrão 120 s), `--no-source-breaker`. Registro: log, nota do `set_complete` e resumo
+  ("pokemontcg.io degradada às HH:MM …; K sets atendidos pelo tcgcsv").
+- **Desfecho = cobertura FINAL:** falha operacional só quando sobra oferta sem resposta válida de qualquer
+  fonte; set atendido pelo resgate sai completo, com a contagem por fonte na nota.
+- **Idade da referência:** `--max-ref-age-days` (padrão 7; **o valor definitivo é do dono** — o 7 é
+  provisório) no scanner (troca a referência velha da fonte principal pela do tcgcsv quando há
+  compatível mais nova, registrada na coluna `Troca de Referência`) e no postprocess (linha mais velha
+  leva "referência desatualizada (N dias)" e nunca sai COMPRA; margem continua exibida). O rodapé mostra,
+  por fonte, o dado mais antigo, o mais novo e a idade.
+- **Conflito de rótulo de acabamento:** raridade CardTrader conclusiva p/ não-holo + produto holo COM
+  impressão normal = `VARIANTE_INCOMPATIVEL` ("raridades em conflito"); sem impressão normal (carta só
+  existe em holo) vale holo. `publishedOn` do tcgcsv com o carimbo do lote não é data de lançamento.
+- **Motivo com fontes:** "Sem Ref Compatível"/"Sem preço" listam as fontes consultadas e as NÃO
+  consultadas com a causa; o fallback vale nos dois sentidos (`--provider tcgcsv` consulta a
+  pokemontcg.io quando saudável). Set com menos da metade precificada (todos os motivos) é destacado no
+  resumo e no rodapé.
+
 ## Scanner paralelo: Dragon Ball Super (`dbs_scanner.py`)
 
 > **Decisão do operador (2026-07-17):** a frota era Pokémon-only e deixava passar

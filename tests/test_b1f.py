@@ -402,3 +402,11 @@ def test_delivery_footer_repeats_the_low_coverage_warning(tmp_path):
         "listings_fetched": 100, "listings_after_filters": 80,
         "cobertura_baixa": "xybsp: 5 de 203 precificadas; 187 sem referência compatível (raridade 'Promo' inconclusiva)"})
     assert "Cobertura baixa" in md and "xybsp: 5 de 203 precificadas" in md
+
+
+def test_claude_md_documents_the_breaker_and_reference_age_flags():
+    t = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    for flag in ("--source-fail-rate", "--source-slow-s", "--source-window", "--source-probe-s",
+                 "--no-source-breaker", "--max-ref-age-days"):
+        assert flag in t, flag
+    assert "valor definitivo é do dono" in t
