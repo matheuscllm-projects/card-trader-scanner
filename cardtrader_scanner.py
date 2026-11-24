@@ -410,7 +410,9 @@ EXCLUDE_GRADED = True            # exclui PSA/BGS/CGC
 # (senão o cache serve preço calculado com a lógica velha até o TTL). Histórico:
 #   1 = pré-v2.18 (reverseHolofoil inflado em holo rare) — agora invalidado.
 #   2 = v2.18+ (seleção ciente de raridade+reverse).
-PRICE_LOGIC_VERSION = "2"
+#   3 = lotes 2/3 (2026-11): nome CT normalizado (δ Delta Species / Gold Star) e
+#       número com letra/prefixo na query — casamento de carta mudou.
+PRICE_LOGIC_VERSION = "3"
 REQUEST_DELAY_CT = 0.15          # CT tem limite 10/s → 0.15s deixa folga
 REQUEST_DELAY_PRICING = 0.1      # pokemontcg.io permite 20k/dia (~0.23/s)
 TIMEOUT = 30
@@ -975,6 +977,26 @@ def ptcg_card_name(ct_name: str) -> str:
     if "δ" in name:
         name = _CT_DELTA_SUFFIX.sub("", name)
     return name.replace("☆ Gold Star", "★")
+
+
+def ptcg_number_query(raw: str) -> str:
+    """Número de coleção CT → forma gravada no campo `number` do pokemontcg.io.
+
+    Conferido em PokemonTCG/pokemon-tcg-data (cards/en/*.json, 2026-11-24):
+    numérico puro sem zero à esquerda ('1', '50'); prefixados mantêm zeros e
+    caixa ('SWSH001', 'XY01', 'SM01', 'TG01', 'GG01', 'SV001', 'H1'); sufixo em
+    minúscula ('SM30a', 'XY67a', '28a'). Só se remove o zero à esquerda quando
+    vem ANTES de uma letra (forma CT '0H2' → 'H2') ou o número é puro."""
+    if not raw:
+        return ""
+    head = str(raw).split("/")[0].strip()
+    if "|" in head:
+        head = head.split("|")[-1].strip()
+    if not head:
+        return ""
+    if head.isdigit():
+        return head.lstrip("0") or "0"
+    return re.sub(r"^0+(?=[A-Za-z])", "", head)
 
 
 def clean_collector_number(raw: str) -> str:
@@ -1930,7 +1952,7 @@ class PokemonTcgIoProvider(PricingProvider):
         # Lote 2 (#2): chave que PRESERVA letra/prefixo (H1 ≠ 1; 50A ≠ 50) — a
         # mesma do caminho tcgcsv. O digits-only antigo casava H1 com a carta #1
         # (ex.: Aquapolis: Ampharos "1" e "H1" existem em ecard2.json).
-        num_clean = tcgcsv_collector_key(number)
+        num_clean = ptcg_number_query(number)
         safe_name = ptcg_card_name(card_name).replace('"', '\\"')
         base_q = f'name:"{safe_name}"'
         if num_clean:

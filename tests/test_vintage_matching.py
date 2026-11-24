@@ -59,31 +59,54 @@ def test_plain_names_are_untouched():
     assert 'name:"Banette"' in sent[0], sent
 
 
-# ── #2: número preserva letra/prefixo no caminho pokemontcg.io ──────────────
-# JSON ecard2: {'number': 'H1', name 'Ampharos'} e {'number': '1', 'Ampharos'};
-# '50' Golduck e '103' Porygon existem SEM variante a/b (a/b só no CT).
+# ── #2/M2: número na query = forma gravada no JSON do pokemontcg.io ─────────
+# pokemon-tcg-data (master, 2026-11-24), campo "number":
+#   ecard2: '1', '50', '103', 'H1'..'H32'          (sem 50a/50b/103a)
+#   swshp: 'SWSH001'..'SWSH307' ; xyp: 'XY01'..'XY211', 'XY67a', 'XY150a'
+#   smp: 'SM01'.., 'SM30a' ; bwp: 'BW01'.. ; dpp: 'DP01'.. ; swsh9tg: 'TG01'..
+#   swsh12pt5gg: 'GG01'.. ; swsh45sv: 'SV001'..'SV122' ; g1: '28a','73a'
+#   sufixo MAIÚSCULO: nenhum caso; minúsculo: 10 casos (SM30a, XY67a, g1 28a...)
+#   numérico puro NUNCA tem zero à esquerda ('1', '50', '103').
 @pytest.mark.parametrize("ct_number, expected", [
     ("H1", "number:H1"),
     ("H16/H32", "number:H16"),
-    ("001/147", "number:1 "),
-    ("002/147", "number:2 "),
+    ("001/147", "number:1"),
+    ("002/147", "number:2"),
+    ("0H2", "number:H2"),            # forma CT da série H → JSON 'H2'
+    ("SWSH001", "number:SWSH001"),   # swshp
+    ("XY01", "number:XY01"),         # xyp
+    ("SM01", "number:SM01"),         # smp
+    ("TG01", "number:TG01"),         # swsh9tg
+    ("GG01", "number:GG01"),         # swsh12pt5gg
+    ("SV001", "number:SV001"),       # swsh45sv
+    ("SM30a", "number:SM30a"),       # sufixo minúsculo (smp)
+    ("XY67a", "number:XY67a"),       # sufixo minúsculo (xyp)
+    ("28a", "number:28a"),           # g1
+    ("Special Illustration Rare | 161/131", "number:161"),
 ])
-def test_number_query_keeps_letter_prefix(ct_number, expected):
+def test_number_query_matches_json_form(ct_number, expected):
     prov, sent = _provider_capturing_queries()
     prov._search("Ampharos", "aq", ct_number)
-    assert expected in sent[0] + " ", sent
+    tokens = sent[0].split()
+    assert expected in tokens, sent
 
 
 @pytest.mark.parametrize("ct_number, expected", [
-    ("50a/147", "number:50A"),
-    ("50b/147", "number:50B"),
-    ("103a/147", "number:103A"),
+    ("50a/147", "number:50a"),
+    ("50b/147", "number:50b"),
+    ("103a/147", "number:103a"),
 ])
 def test_number_query_does_not_collapse_suffix_variants(ct_number, expected):
     prov, sent = _provider_capturing_queries()
     prov._search("Golduck", "aq", ct_number)
-    assert expected in sent[0], sent
-    assert "number:50 " not in sent[0] + " " and "number:103 " not in sent[0] + " "
+    tokens = sent[0].split()
+    assert expected in tokens, sent
+    assert "number:50" not in tokens and "number:103" not in tokens
+
+
+def test_price_logic_version_bumped_for_matching_change():
+    # chave do price_cache inclui a versão: a lógica de casamento mudou (lotes 2/3)
+    assert sc.PRICE_LOGIC_VERSION == "3"
 
 
 # ── #3: aliases (parcial: wcd2010) ──────────────────────────────────────────
