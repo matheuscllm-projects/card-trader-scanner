@@ -1,0 +1,379 @@
+{
+ "wiz": [
+  {
+   "gid": 1418,
+   "pid": 84143,
+   "name": "Celebi",
+   "number": "50/53",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Normal",
+     110.31
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 85074,
+   "name": "Eevee",
+   "number": "11/53",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Holofoil",
+     57.91
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 86112,
+   "name": "Hitmontop",
+   "number": "37/53",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Normal",
+     8.93
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 86120,
+   "name": "Ho-oh",
+   "number": "52/53",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Normal",
+     59.01
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 87394,
+   "name": "Mew (8)",
+   "number": "08/53",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Normal",
+     11.9
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 87395,
+   "name": "Mew (9)",
+   "number": "09/53",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Holofoil",
+     154.19
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 88065,
+   "name": "Pikachu (1) (Misprint)",
+   "number": "01/53",
+   "rarity": "Promo",
+   "prices": []
+  },
+  {
+   "gid": 1418,
+   "pid": 88575,
+   "name": "Rapidash (51)",
+   "number": "51/53",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Normal",
+     56.21
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 88862,
+   "name": "Sabrina's Abra",
+   "number": "19/53",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Normal",
+     50.28
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 89353,
+   "name": "Smeargle",
+   "number": "32/53",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Normal",
+     19.08
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 118775,
+   "name": "Dark Gyarados (Prerelease)",
+   "number": "08/82",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Holofoil",
+     36.17
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 121772,
+   "name": "Pikachu (1)",
+   "number": "01/53",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Normal",
+     42.85
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 123445,
+   "name": "Misty's Seadra (Prerelease)",
+   "number": "009/132",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Holofoil",
+     20.23
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 123631,
+   "name": "Kabuto [W Stamped]",
+   "number": "50/62",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Normal",
+     61.09
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 123632,
+   "name": "Brock's Vulpix [W Stamped]",
+   "number": "037/132",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Normal",
+     31.38
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 126208,
+   "name": "Dark Arbok [W Stamped]",
+   "number": "19/82",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Normal",
+     58.53
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 154997,
+   "name": "Clefable (Prerelease)",
+   "number": "01/64",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Holofoil",
+     248.33
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 154998,
+   "name": "Aerodactyl (Prerelease)",
+   "number": "01/62",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "1st Edition Holofoil",
+     95.9
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 180834,
+   "name": "Dark Charmeleon [W Stamped]",
+   "number": "32/82",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Normal",
+     117.8
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 244347,
+   "name": "Rapidash [Pokemon Center NY]",
+   "number": "51/53",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Normal",
+     119.87
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 244348,
+   "name": "Ho-oh [Pokemon Center NY]",
+   "number": "52/53",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Normal",
+     124.37
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 607818,
+   "name": "Mew - 8 (Glossy Finish)",
+   "number": "8",
+   "rarity": "Promo",
+   "prices": [
+    [
+     "Normal",
+     38.14
+    ]
+   ]
+  },
+  {
+   "gid": 1418,
+   "pid": 618732,
+   "name": "Eevee (JR East Stamp Rally)",
+   "number": "11/53",
+   "rarity": "Promo",
+   "prices": []
+  }
+ ],
+ "asc": [
+  {
+   "gid": 24541,
+   "pid": 675813,
+   "name": "Erika's Oddish",
+   "number": "001/217",
+   "rarity": "Common",
+   "prices": [
+    [
+     "Normal",
+     0.2
+    ]
+   ]
+  },
+  {
+   "gid": 24541,
+   "pid": 676852,
+   "name": "Erika's Oddish (Poke Ball)",
+   "number": "001/217",
+   "rarity": "Common",
+   "prices": [
+    [
+     "Reverse Holofoil",
+     0.25
+    ]
+   ]
+  },
+  {
+   "gid": 24541,
+   "pid": 676992,
+   "name": "Erika's Oddish (Energy Symbol Pattern)",
+   "number": "001/217",
+   "rarity": "Common",
+   "prices": [
+    [
+     "Reverse Holofoil",
+     0.28
+    ]
+   ]
+  }
+ ],
+ "pre": [
+  {
+   "gid": 23821,
+   "pid": 610356,
+   "name": "Exeggcute",
+   "number": "001/131",
+   "rarity": "Common",
+   "prices": [
+    [
+     "Normal",
+     0.06
+    ],
+    [
+     "Reverse Holofoil",
+     0.12
+    ]
+   ]
+  },
+  {
+   "gid": 23821,
+   "pid": 610536,
+   "name": "Exeggcute (Poke Ball Pattern)",
+   "number": "001/131",
+   "rarity": "Common",
+   "prices": [
+    [
+     "Holofoil",
+     0.27
+    ]
+   ]
+  },
+  {
+   "gid": 23821,
+   "pid": 610637,
+   "name": "Exeggcute (Master Ball Pattern)",
+   "number": "001/131",
+   "rarity": "Common",
+   "prices": [
+    [
+     "Holofoil",
+     0.98
+    ]
+   ]
+  }
+ ]
+}

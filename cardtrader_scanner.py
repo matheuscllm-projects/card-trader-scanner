@@ -2341,9 +2341,10 @@ class TcgCsvFallbackProvider(PricingProvider):
         cobertura) ou "fetch_failed" (rede/5xx/timeout = falha operacional).
         Roda no máx. 1× por set; /groups com falha não é refeito a cada set
         (cache negativo só dentro do run)."""
-        self.last_prefill_status = "ok" if self._set_index.get(ct_set_code) else "no_group"
+        _has = bool(self._set_index.get(ct_set_code)) or bool((self.__dict__.get("_ambiguous") or {}).get(ct_set_code))
+        self.last_prefill_status = "ok" if _has else "no_group"
         if ct_set_code in self._set_index:
-            return bool(self._set_index[ct_set_code])
+            return _has
         # Lote 3c: cache negativo de /groups EXPIRA em poucos minutos (um blip no
         # 1º set não condena o run) e cada busca tenta algumas vezes com espera curta.
         if (self._groups_fetched and self._groups is None
@@ -2382,7 +2383,7 @@ class TcgCsvFallbackProvider(PricingProvider):
         # v2.28: set pode abranger >1 group (gen = Generations + Radiant
         # Collection). Indexa cada group; se QUALQUER um falhar, aborta o set
         # (índice parcial perderia o guard de colisão abaixo).
-        per_group: list[tuple[dict, dict, dict]] = []
+        per_group: list[tuple[dict, dict, dict, dict]] = []
         group_meta: list[tuple] = []   # (nome do group, publishedOn) — Shadowless / idade do set
         for group_id in group_ids:
             products, f1 = self._get_json(f"{group_id}/products")
@@ -2402,18 +2403,26 @@ class TcgCsvFallbackProvider(PricingProvider):
             group_meta.append((g.get("name") or "", g.get("publishedOn")))
 
         from collections import Counter
-        key_count = Counter(k for idx, _, _r in per_group for k in idx)
-        collisions = {k for k, n in key_count.items() if n > 1}
-        if collisions:
+        # B1i: candidatos de TODOS os groups do set por chave; >1 produto (no mesmo group ou entre
+        # groups) = colisão: sai do índice e só casa se um dado declarado da oferta desempatar
+        all_cands: dict[str, list] = {}
+        for (_i, _p, _r, cd), (gname, _pub) in zip(per_group, group_meta):
+            for k, lst in cd.items():
+                for c in lst:
+                    all_cands.setdefault(k, []).append({**c, "gname": gname})
+        ambiguous = {k: v for k, v in all_cands.items() if len(v) > 1}
+        collisions = set(ambiguous)
+        self.__dict__.setdefault("_ambiguous", {})[ct_set_code] = ambiguous
+        if ambiguous:
             log.warning(
-                f"  tcgcsv {ct_set_code}: {len(collisions)} número(s) presentes "
-                f"em >1 group {group_ids} — descartados (ambíguos, sem preço)"
+                f"  tcgcsv {ct_set_code}: {len(ambiguous)} chave(s) com >1 produto na referência "
+                f"(group(s) {group_ids}) — ambíguas (só casam por número completo/nome exato)"
             )
         index: dict[str, dict] = {}
         pid_map: dict[str, dict] = {}
         gname_map: dict[str, str] = {}
         rar_all: dict[str, str] = {}
-        for (idx, pids, rars), (gname, _pub) in zip(per_group, group_meta):
+        for (idx, pids, rars, _cd), (gname, _pub) in zip(per_group, group_meta):
             for key, variants in idx.items():
                 if key in collisions:
                     continue
@@ -2429,7 +2438,7 @@ class TcgCsvFallbackProvider(PricingProvider):
         self._set_index[ct_set_code] = index
         self._pid_index[ct_set_code] = pid_map
         self.__dict__.setdefault("_fetched_at", {})[ct_set_code] = now_iso()
-        self.last_prefill_status = "ok" if index else "no_group"
+        self.last_prefill_status = "ok" if (index or ambiguous) else "no_group"
         if index:
             # v2.26: a mesma classe atende fallback (v2.23) e primário
             # (--provider tcgcsv) — mensagem neutra quanto ao papel.
@@ -2438,7 +2447,7 @@ class TcgCsvFallbackProvider(PricingProvider):
                 f"{'+'.join(str(g) for g in group_ids)}): {len(index)} "
                 f"cards indexados"
             )
-        return bool(index)
+        return bool(index) or bool(ambiguous)
 
     def _dump_at(self) -> Optional[str]:
         """Data do DUMP diário do tcgcsv (`/last-updated.txt`) — a data do DADO. Uma busca por run;
@@ -2460,16 +2469,19 @@ class TcgCsvFallbackProvider(PricingProvider):
         return d["_dump_at_val"]
 
     @staticmethod
-    def _index_group(products: dict, prices: dict) -> tuple[dict, dict, dict]:
+    def _index_group(products: dict, prices: dict) -> tuple[dict, dict, dict, dict]:
         """Índice de UM group tcgcsv: (numerador→variantes, numerador→variante→pid,
-        numerador→raridade do PRODUTO no tcgcsv — B1e: 2ª fonte de rótulo p/ detectar holo)."""
+        numerador→raridade do PRODUTO no tcgcsv — B1e: 2ª fonte de rótulo p/ detectar holo,
+        numerador→LISTA de produtos candidatos — B1i: colisão = mais de 1 produto na chave)."""
         # productId → numerador do collector number (extendedData "Number")
         num_by_pid: dict[int, str] = {}
         rar_by_pid: dict[int, str] = {}
+        name_by_pid: dict[int, str] = {}
         for p in products.get("results") or []:
             pid = p.get("productId")
             if pid is None:
                 continue
+            name_by_pid[pid] = p.get("name") or ""
             for ed in p.get("extendedData") or []:
                 if ed.get("name") == "Number" and ed.get("value"):
                     num_by_pid[pid] = str(ed["value"])
@@ -2496,6 +2508,7 @@ class TcgCsvFallbackProvider(PricingProvider):
         index: dict[str, dict] = {}
         pid_map: dict[str, dict] = {}
         rar_map: dict[str, str] = {}
+        cands: dict[str, list] = {}
         for pid, num_raw in num_by_pid.items():
             # v2.26: chave por VARIANTE de numeração (letras preservadas) —
             # o digits-only antigo colidia série H / sufixos a/b do e-Card e
@@ -2506,6 +2519,11 @@ class TcgCsvFallbackProvider(PricingProvider):
             if not key or not any(c.isdigit() for c in key):
                 continue
             variants = variants_by_pid.get(pid)
+            # B1i: TODOS os produtos numerados da chave (com ou sem preço) são candidatos; chave com
+            # mais de um é AMBÍGUA e não entra no índice (nada de last-wins)
+            cands.setdefault(key, []).append({
+                "pid": pid, "name": name_by_pid.get(pid, ""), "number": str(num_raw),
+                "rarity": rar_by_pid.get(pid), "variants": variants or {}})
             if variants:
                 index[key] = variants
                 # MESMA escolha last-wins do _set_index → o productId guardado é o
@@ -2513,7 +2531,50 @@ class TcgCsvFallbackProvider(PricingProvider):
                 pid_map[key] = {v: pid for v in variants}
                 if pid in rar_by_pid:
                     rar_map[key] = rar_by_pid[pid]
-        return index, pid_map, rar_map
+        for k, v in cands.items():
+            if len(v) > 1:
+                index.pop(k, None)
+                pid_map.pop(k, None)
+                rar_map.pop(k, None)
+        return index, pid_map, rar_map, cands
+
+    def _price_ambiguous(self, cands: list, card_name: str, set_code: str, collector_number: str,
+                         foil: bool, rarity: Optional[str], first_edition: bool) -> Optional[float]:
+        """B1i: mais de um PRODUTO na chave. Casa só se o número completo/nome exato desempata; senão
+        INCOMPATIVEL "referência ambígua: N produtos com a mesma chave" (sem margem, sem Inferido)."""
+        chosen, why = ct_variants.resolve_candidates(cands, card_name, collector_number)
+        rel = (self.__dict__.get("_set_released") or {}).get(set_code)
+        self.last_set_release_date = rel
+        self.last_ref_data_at = self._dump_at()
+        self.last_price_source = "tcgcsv"
+        self.last_price_fetched_at = getattr(self, "_fetched_at", {}).get(set_code)
+        if chosen is None:
+            hd = ct_variants.holo_detection(rarity, set_released=rel, set_code=set_code)
+            offer = ct_variants.offer_variant(first_edition, bool(foil), hd.is_holo)
+            self._set_ref(ct_variants.Match(None, ct_variants.INCOMPATIVEL, why, None), {}, offer,
+                          hd.era_missing, rarity)
+            return None
+        variants = chosen["variants"]
+        if not variants:
+            hd = ct_variants.holo_detection(rarity, set_released=rel, set_code=set_code)
+            offer = ct_variants.offer_variant(first_edition, bool(foil), hd.is_holo)
+            self._set_ref(ct_variants.Match(None, ct_variants.SEM_PRECO,
+                                            f"produto '{chosen['name']}' encontrado sem preço", None), {}, offer,
+                          hd.era_missing, rarity)
+            return None
+        self.last_normal_market = (variants.get("normal") or {}).get("market")
+        om = ct_variants.match_offer(variants, first_edition, foil, rarity, ref_rarity=chosen.get("rarity"),
+                                     set_released=rel, set_code=set_code, group_name=chosen.get("gname"))
+        m, hd, offer = om.match, om.hd, om.offer
+        self._set_ref(m, variants, offer, hd.era_missing, rarity, inferred=om.inferred)
+        pid = chosen["pid"]
+        if m.status != ct_variants.OK:
+            self.last_tcg_url = f"https://www.tcgplayer.com/product/{pid}"
+            return None
+        self.last_variant_used = m.key
+        self.last_tcg_url = f"https://www.tcgplayer.com/product/{pid}"
+        market = (variants[m.key].get("market")) or 0.0
+        return market if market > 0 else None
 
     def market_price_usd(self, card_name: str, set_code: str,
                          collector_number: str,
@@ -2536,12 +2597,15 @@ class TcgCsvFallbackProvider(PricingProvider):
         self._reset_ref()
 
         index = self._set_index.get(set_code)
-        if not index:
+        if not index and not (self.__dict__.get("_ambiguous") or {}).get(set_code):
             return None
         key = tcgcsv_collector_key(collector_number)
         if not key:
             return None
-        variants = index.get(key)
+        amb = (self.__dict__.get("_ambiguous") or {}).get(set_code, {}).get(key)
+        if amb:
+            return self._price_ambiguous(amb, card_name, set_code, collector_number, foil, rarity, first_edition)
+        variants = (index or {}).get(key)
         if not variants:
             return None
         foil = bool(foil)

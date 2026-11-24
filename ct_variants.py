@@ -429,3 +429,45 @@ def match_offer(prices: dict, first_edition: bool, reverse: bool, ct_rarity: Opt
         return OfferMatch(Match(None, INCOMPATIVEL, f"{blocked} (disponíveis: {avail})", None), hd, offer, None)
     m = match_reference_variant(prices, *offer, group_name=group_name, era_missing=hd.era_missing)
     return OfferMatch(m, hd, offer, inferred if m.status == OK else None)
+
+
+# ─── B1i: colisão de chave no índice da referência ───────────────────────────
+def _norm_name(x) -> str:
+    return re.sub(r"\s+", " ", str(x or "").strip().lower())
+
+
+def _full_number(raw) -> tuple:
+    """'08/53' -> ('8', '53'); '008' -> ('8', None); letras preservadas; zeros à esquerda de cada run
+    numérico removidos (mesma ideia da chave do tcgcsv)."""
+    s = str(raw or "").strip().upper()
+    num, _, den = s.partition("/")
+
+    def z(t):
+        return re.sub(r"(?<!\d)0+(?=\d)", "", t.strip())
+    return (z(num), z(den) if den.strip() else None)
+
+
+def resolve_candidates(cands: list, card_name, collector_number):
+    """Vários PRODUTOS da referência com a mesma chave (numerador). Devolve (candidato|None, motivo).
+
+    Só casa se um dado DECLARADO da oferta desempata de forma inequívoca: (1) número COMPLETO com
+    denominador igual ao do produto; (2) nome EXATO do produto. Critérios que apontam produtos diferentes,
+    ou que não reduzem a lista a exatamente um, = ambígua. Nunca ordem de chegada, preço ou nome parcial."""
+    n = len(cands)
+    if n <= 1:
+        return (cands[0] if cands else None), ""
+    lists = []
+    if "/" in str(collector_number or ""):
+        off_num = _full_number(collector_number)
+        a = [c for c in cands if "/" in str(c.get("number") or "") and _full_number(c.get("number")) == off_num]
+        if a:
+            lists.append(a)
+    b = [c for c in cands if _norm_name(c.get("name")) == _norm_name(card_name)]
+    if b:
+        lists.append(b)
+    if lists:
+        pool = [c for c in cands if all(any(c is x for x in l) for l in lists)]   # todos os critérios aplicáveis concordam
+        if len(pool) == 1:
+            return pool[0], ""
+    names = "; ".join(f"{c.get('name')} [{c.get('number')}]" for c in cands[:4])
+    return None, f"referência ambígua: {n} produtos com a mesma chave ({names}{'…' if n > 4 else ''})"
