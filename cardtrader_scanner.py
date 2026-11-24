@@ -5187,9 +5187,33 @@ def _live_ok(o) -> bool:
 
 
 def validation_exit_code(opps) -> int:
-    """B1m: 0 normalmente; 3 quando HOUVE candidatos e NENHUM teve preço live válido (validação inteira falhou)."""
+    """Código de saída da validação per-blueprint (o XLSX já foi gravado).
+
+    0 = ok, inclusive "tudo STALE"/NAO_CONFIRMAVEL (resultado legítimo) ou qualquer oferta com live válido.
+    3 = nenhum live válido E existe PRECO_INVALIDO (ou VALIDATED_* com live inválido): falha de preço live.
+    2 = TODOS os candidatos em API_ERROR (falha operacional/parcial; nunca "preço inválido")."""
     cand = [o for o in opps if getattr(o, "validation_status", None) not in (None, "", "NOT_VALIDATED")]
-    return 3 if cand and not any(_live_ok(o) for o in cand if o.validation_status in ("VALIDATED_REAL", "VALIDATED_MARKUP")) else 0
+    if not cand:
+        return 0
+    validated = ("VALIDATED_REAL", "VALIDATED_MARKUP")
+    if any(_live_ok(o) for o in cand if o.validation_status in validated):
+        return 0
+    if all(o.validation_status == "API_ERROR" for o in cand):
+        return 2
+    if any(o.validation_status == "PRECO_INVALIDO" or o.validation_status in validated for o in cand):
+        return 3
+    return 0
+
+
+def validation_exit_message(code: int) -> str:
+    if code == 3:
+        return ("⛔ NENHUMA oferta teve preço live válido na validação per-blueprint (preço live 0/ausente/não finito) — "
+                "o XLSX está completo, mas as linhas ficam 'preço não validado' (REVISAR). Saída com código 3.")
+    if code == 2:
+        return ("⛔ A validação per-blueprint falhou por completo (erro de API em TODOS os candidatos) — o XLSX está "
+                "completo, mas NENHUMA oferta foi validada pelo preço de checkout. Saída com código 2 (falha operacional; "
+                "tente de novo).")
+    return ""
 
 
 def print_top_opportunities(opps_by_net, validated: bool = True) -> None:
@@ -5262,6 +5286,12 @@ def validation_record_matches(o: "Opportunity", rec: dict) -> bool:
     """Lote 3c: um registro só vale para ESTA oferta se o preço da oferta e a
     referência forem idênticos aos da validação (registro sem eles = não vale)."""
     try:
+        if rec.get("validation_status") in ("VALIDATED_REAL", "VALIDATED_MARKUP"):
+            # B1n: registro validado com preço live ausente/<=0/não finito (ex.: gravado pelo bug do B1m) NUNCA é
+            # reaproveitado: o candidato volta à API
+            live = rec.get("live_price_brl")
+            if isinstance(live, bool) or not isinstance(live, (int, float)) or not math.isfinite(live) or live <= 0:
+                return False
         return (abs(float(rec["offer_price_brl"]) - o.ct_price_brl) < 0.005
                 and abs(float(rec["ref_brl"]) - o.tcg_market_brl) < 0.005)
     except (KeyError, TypeError, ValueError):
@@ -6196,8 +6226,7 @@ def main():
     if args.validate_top != 0 and not interrupted:
         _vcode = validation_exit_code(opps)
         if _vcode:
-            log.error("⛔ NENHUMA oferta teve preço live válido na validação per-blueprint — o XLSX está completo, mas "
-                      "as linhas ficam como 'preço não validado' (REVISAR). Saída com código 3.")
+            log.error(validation_exit_message(_vcode))
             sys.exit(_vcode)
 
     if interrupted:

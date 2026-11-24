@@ -142,7 +142,12 @@ if ((Test-Path -LiteralPath $stderrFile) -and (Get-Item -LiteralPath $stderrFile
 
 "--- SCANNER exit=$scannerExit at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ---" | Add-Content -LiteralPath $logFile -Encoding utf8
 
-if ($scannerExit -ne 0) {
+if (($scannerExit -in 2, 3) -and (Test-Path -LiteralPath $rawOut)) {
+    # B1n: 2 = validacao per-blueprint falhou por completo (API); 3 = nenhum preco live valido. O XLSX foi gravado
+    # completo: o postprocess TEM de rodar (o relatorio mostra os REVISAR "preco nao validado"). Sem XLSX aborta abaixo.
+    "SCANNER exit=$scannerExit com XLSX gravado: seguindo para o postprocess (linhas sem preco live ficam REVISAR)" | Add-Content -LiteralPath $logFile -Encoding utf8
+}
+elseif ($scannerExit -ne 0) {
     "SCANNER FAILED exit=$scannerExit" | Add-Content -LiteralPath $logFile -Encoding utf8
     exit $scannerExit
 }

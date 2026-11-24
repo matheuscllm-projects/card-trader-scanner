@@ -305,6 +305,20 @@ def liquidity_verdict(row, cfg: DecisionConfig):
 def classify_decision(row, cfg: DecisionConfig, check_liquidity: bool = True):
     """Aplica regra mecanica. Retorna (decisao, porque). O chase NAO participa.
     `check_liquidity=False` so serve p/ escolher quais linhas consultar no PriceCharting."""
+    val = str(row.get("validation_status", "")).upper()
+    # B1n: falha de preço LIVE (PRECO_INVALIDO, ou VALIDATED_* sem preço de checkout válido) não é falta de referência
+    # nem "abaixo do piso": vem ANTES de SEM REF e de qualquer corte de margem; a linha segue visível em REVISAR.
+    _lv = row.get("live_brl")
+    _live_bad = _lv is not None and not (isinstance(_lv, float) and pd.isna(_lv)) and not ((_num(_lv) or 0) > 0)
+    _sm0 = row.get("sem_margem_motivo")
+    _has_margin = not (isinstance(_sm0, str) and _sm0.strip())      # margem calculada (do preço cru do scan)
+    _gallery = bool(row.get("trainer_gallery_potential_fp", False))   # TG/GG segue NAO (falso positivo independente do preço)
+    if not _gallery and (val == "PRECO_INVALIDO" or (val in ("VALIDATED_REAL", "VALIDATED_MARKUP") and (
+            _live_bad or (not _is_truthy_flag(row.get("compra_inclui_hub")) and _has_margin)))):
+        _nm = _num(row.get("net_margin"))
+        _m = f"margem {_nm:.0%} sobre o preço cru do scan" if _nm is not None else "sem margem calculável"
+        return "REVISAR", (f"preço não validado (preço live inválido/ausente: LIVE R$ ausente ou ≤ 0 no checkout "
+                           f"per-blueprint); {_m}")
     sm = row.get("sem_margem_motivo")   # compute devolveu "sem margem": nunca herda numero do XLSX
     if isinstance(sm, str) and sm.strip():
         return "SEM REF", sm.strip()
@@ -344,9 +358,6 @@ def classify_decision(row, cfg: DecisionConfig, check_liquidity: bool = True):
         return "REVISAR", f"Margem {nm:.0%} OK mas lucro R${profit:.0f} < R${cfg.min_lucro_liq:.0f}"
     if val == "MARKUP_TIER_ANOMALOUS" or val == "ANOMALOUS_MARKUP":
         return "REVISAR", f"Markup anomalo (>45%); margem {nm:.0%}"
-    if val == "PRECO_INVALIDO":      # B1m: preço live 0/ausente/não finito na validação: visível, nunca COMPRA, nunca "sem referência"
-        return "REVISAR", (f"preço não validado (preço live inválido no checkout per-blueprint); "
-                           f"margem {nm:.0%} sobre preço cru do scan")
     if val not in ("VALIDATED_REAL", "VALIDATED_MARKUP"):
         return "REVISAR", f"Validation {val or 'ausente'}; margem {nm:.0%} (preço sem checkout real)"
     if not _is_truthy_flag(row.get("compra_inclui_hub")):   # VALIDATED sem LIVE na linha = sem preço de checkout
@@ -663,7 +674,10 @@ def enrich_df(raw_df: pd.DataFrame, hub_fee_rate: float | None = None,
     scan_brl_col = next((c for c in raw_df.columns if str(c).strip() == "Scan R$ (raw)"), None)
     scan_net_col = next((c for c in raw_df.columns if str(c).strip() == "Net Margin % (scan)"), None)
     if "live_brl" in df.columns:
-        df["live_brl"] = pd.to_numeric(df["live_brl"], errors="coerce")
+        # B1n: LIVE <= 0 / não finito NUNCA é preço de checkout (era o LIVE 0,0 do bug do B1m): vira ausente, cai no
+        # preço cru do scan (compra_inclui_hub=False) e a decisão manda a REVISAR "preço não validado"
+        _live = pd.to_numeric(df["live_brl"], errors="coerce")
+        df["live_brl"] = _live.where(_live > 0)
         df["compra_inclui_hub"] = df["live_brl"].notna()
     else:
         df["compra_inclui_hub"] = False
