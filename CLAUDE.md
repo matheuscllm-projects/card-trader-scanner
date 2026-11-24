@@ -675,6 +675,12 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
   da decisão do dono: `ct_variants.INCONCLUSIVE_SINGLE_PRINT_POLICY` (`{"normal": "inferir", "holo":
   "sem_referencia"}`; promo com única impressão holo segue sem referência até o dono trocar o valor) e
   `NO_INFERENCE_CT_RARITIES`. Mais de uma impressão não-reverse = sem referência compatível.
+- **Referência ambígua (B1i/B1j):** dois produtos DIFERENTES da referência na mesma chave (ex.: wiz Mew "08/53" × "Mew - 8 (Glossy Finish)"),
+  duas linhas do mesmo subtipo no mesmo produto com preços diferentes, ou vários resultados da pokemontcg.io para a mesma carta = AMBÍGUA:
+  nunca "um dos dois" (nada de last-wins, `results[0]`, ordem ou preço). Só casa se dado declarado da oferta desempata (número completo com
+  denominador ou nome exato do produto); senão sem referência compatível, motivo "referência ambígua: N produtos com a mesma chave".
+  Rótulo CT inconclusivo QUALQUER (vazio/Promo/"Fixed"/desconhecido) segue a política de única impressão — nunca "Sim". Idade da
+  referência ausente, negativa ou futura = desconhecida = REVISAR.
 - **Motivo com fontes:** "Sem Ref Compatível"/"Sem preço" listam as fontes consultadas e as NÃO
   consultadas com a causa; o fallback vale nos dois sentidos (`--provider tcgcsv` consulta a
   pokemontcg.io quando saudável). Set com menos da metade precificada (todos os motivos) é destacado no
