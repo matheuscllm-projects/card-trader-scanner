@@ -1040,6 +1040,8 @@ class Listing:
     # chave veio no payload (sem ela não dá pra afirmar "Unlimited" na conferência).
     first_edition: bool = False
     first_edition_known: bool = False
+    # B1o: `pokemon_reverse` AUSENTE no payload = acabamento NÃO declarado (a oferta segue, mas como Inferido/REVISAR)
+    reverse_unknown: bool = False
 
     @property
     def uid(self) -> str:
@@ -3480,6 +3482,7 @@ class Scanner:
             "skipped_invalid_price": 0,       # B1n: sem preço CT válido (ausente/0/não finito)
             "skipped_unexpected_payload": 0,  # B1n: campo obrigatório ausente (graded/condition/língua/vendedor)
             "listings_no_blueprint": 0, "listings_rejected_by_filters": 0, "listings_deduped": 0,
+            "listings_canary_discarded": 0,   # B1o: válidas descartadas porque o canário de formato disparou no set
             "expansions_skipped_by_list": 0,  # v2.4: sets pulados via skip-list
             "expansions_timed_out": 0,        # v2.4: sets que estouraram per_set_timeout
             "pricing_failures": 0,            # v2.9 (Codex H5): erros desconhecidos no pricing
@@ -3534,17 +3537,22 @@ class Scanner:
             missing.append("user.username")
         if missing:
             pm = self.__dict__.setdefault("_pl_missing", {})
+            pt = self.__dict__.setdefault("_pl_missing_total", {})
             for k in missing:
                 pm[k] = pm.get(k, 0) + 1
+                pt[k] = pt.get(k, 0) + 1
+            self.__dict__["_pl_dropped"] = self.__dict__.get("_pl_dropped", 0) + 1
             self._count("skipped_unexpected_payload")
             return None
         # B1n: campos OPCIONAIS com default seguro DOCUMENTADO (e contado): pokemon_reverse ausente = não-reverse
         # (1/6237 em dado real), user_type ausente = "private", can_sell_via_hub ausente = False (só informativos).
         pdft = self.__dict__.setdefault("_pl_defaults", {})
+        pdt = self.__dict__.setdefault("_pl_defaults_total", {})
         for k, present in (("pokemon_reverse", "pokemon_reverse" in props), ("user.can_sell_via_hub", "can_sell_via_hub" in user),
                            ("user.user_type", "user_type" in user)):
             if not present:
                 pdft[k] = pdft.get(k, 0) + 1
+                pdt[k] = pdt.get(k, 0) + 1
         if currency == "BRL":
             price_brl_val = cents / 100.0
         elif currency == "EUR":
@@ -3609,6 +3617,7 @@ class Scanner:
             seller_user_type=user.get("user_type", "private"),
             first_edition=to_bool(props.get("first_edition", False)),
             first_edition_known="first_edition" in props,
+            reverse_unknown="pokemon_reverse" not in props,
             cardtrader_url=f"https://www.cardtrader.com/cards/{raw['blueprint_id']}",
             # 2026-05-16: Schema CT blueprint tem rarity em fixed_properties.pokemon_rarity,
             # NÃO no campo `rarity` raiz (verificado via inspect do bp[0] de sfa).
@@ -3622,6 +3631,15 @@ class Scanner:
                 or ""
             ).strip(),
         )
+
+    def _inferred_note(self, l: "Listing", source_provider) -> str:
+        """Texto de acabamento INFERIDO: o da fonte + (B1o) `pokemon_reverse` ausente no payload — a oferta segue, mas
+        com acabamento NÃO declarado (Inferido/REVISAR, nunca COMPRA)."""
+        base = self._pa(source_provider, "last_ref_inferred", str, "") or ""
+        if getattr(l, "reverse_unknown", False):
+            note = "campo pokemon_reverse ausente no payload (acabamento não declarado pela CardTrader)"
+            return f"{base}; {note}" if base else note
+        return base
 
     def _count(self, key: str, n: int = 1) -> None:
         self.stats[key] = self.stats.get(key, 0) + n
@@ -3652,19 +3670,35 @@ class Scanner:
     PAYLOAD_CANARY_FRACTION = 0.10      # fração de listings do set sem uma chave obrigatória que dispara o canário
     PAYLOAD_CANARY_MIN_SAMPLE = 20
 
-    def _check_payload_canary(self, exp_code: str, total: int) -> bool:
-        """B1n: se uma fração relevante dos listings do set veio SEM uma chave obrigatória, o formato da API mudou:
-        log.error + desfecho operational_failure (nunca no_coverage; tentar de novo / corrigir o scanner)."""
+    def _check_payload_canary(self, exp_code: str, total: int, kept: int = 0) -> bool:
+        """B1n/B1o: se o set veio SEM uma chave obrigatória em fração relevante dos listings (set com >= 20: a fração
+        configurada; set menor: TODOS os listings), ou se TODAS as ofertas foram descartadas por payload (chaves
+        diferentes), o formato da API mudou: log.error + desfecho operational_failure (nunca complete/no_coverage).
+        As `kept` ofertas válidas NÃO seguem para precificação: ficam numa parcela própria do funil
+        ("descartadas pelo canário de formato"), para a soma fechar."""
         miss = self.__dict__.get("_pl_missing") or {}
-        if total < self.PAYLOAD_CANARY_MIN_SAMPLE:
+        dropped = self.__dict__.get("_pl_dropped", 0)
+        if total < 1 or not miss:
+            self._count("listings_after_filters", kept)
             return False
-        for key, n in sorted(miss.items(), key=lambda kv: -kv[1]):
-            if n / total >= self.PAYLOAD_CANARY_FRACTION:
-                log.error(f"  ⛔ {exp_code}: formato da API mudou: chave {key} ausente em {n}/{total} listings — "
-                          f"set NÃO avaliado (falha operacional, não 'sem cobertura')")
-                self._set_outcome("operational_failure", f"api_format_changed_{key}")
-                return True
-        return False
+        key = None
+        top = sorted(miss.items(), key=lambda kv: -kv[1])
+        for k, n in top:
+            ratio = n / total
+            if (total >= self.PAYLOAD_CANARY_MIN_SAMPLE and ratio >= self.PAYLOAD_CANARY_FRACTION) or \
+                    (total < self.PAYLOAD_CANARY_MIN_SAMPLE and n == total):
+                key, cnt = k, n
+                break
+        if key is None and dropped >= total:
+            key, cnt = top[0][0], top[0][1]
+        if key is None:
+            self._count("listings_after_filters", kept)
+            return False
+        log.error(f"  ⛔ {exp_code}: formato da API mudou: chave {key} ausente em {cnt}/{total} listings — "
+                  f"set NÃO avaliado (falha operacional, não 'sem cobertura')")
+        self._count("listings_canary_discarded", kept)
+        self._set_outcome("operational_failure", f"api_format_changed_{key}")
+        return True
 
     def funnel_summary_lines(self) -> list[str]:
         st = self.stats
@@ -3672,10 +3706,24 @@ class Scanner:
             f"Funil de ofertas: baixadas {st.get('listings_fetched', 0)} = {st.get('listings_after_filters', 0)} após filtros"
             f" + {st.get('listings_deduped', 0)} duplicadas + {st.get('listings_rejected_by_filters', 0)} reprovadas nos filtros"
             f" + {st.get('listings_no_blueprint', 0)} sem blueprint + {st.get('skipped_invalid_price', 0)} sem preço CT válido"
-            f" + {st.get('skipped_unexpected_payload', 0)} payload inesperado + {st.get('skipped_exotic_currency', 0)} moeda não suportada",
+            f" + {st.get('skipped_unexpected_payload', 0)} payload inesperado + {st.get('skipped_exotic_currency', 0)} moeda não suportada"
+            f" + {st.get('listings_canary_discarded', 0)} descartadas pelo canário de formato",
             f"sem preço CT válido: {st.get('skipped_invalid_price', 0)} | payload inesperado: {st.get('skipped_unexpected_payload', 0)}"
-            f" | moeda não suportada: {st.get('skipped_exotic_currency', 0)}",
-        ]
+            f" | moeda não suportada: {st.get('skipped_exotic_currency', 0)}"
+            f" | descartadas pelo canário de formato: {st.get('listings_canary_discarded', 0)}",
+        ] + self._payload_defaults_lines()
+
+    def _payload_defaults_lines(self) -> list[str]:
+        out = []
+        d = self.__dict__.get("_pl_defaults_total") or {}
+        if d:
+            out.append("campos opcionais AUSENTES no payload (default aplicado, oferta mantida"
+                       + ("; pokemon_reverse ausente = acabamento NÃO declarado → Inferido/REVISAR" if "pokemon_reverse" in d else "")
+                       + "): " + ", ".join(f"{k} {v}" for k, v in sorted(d.items())))
+        m = self.__dict__.get("_pl_missing_total") or {}
+        if m:
+            out.append("campos OBRIGATÓRIOS ausentes (oferta descartada): " + ", ".join(f"{k} {v}" for k, v in sorted(m.items())))
+        return out
 
     def _passes_filters(self, l: Listing) -> bool:
         if l.condition != CONDITION_FILTER:
@@ -4151,9 +4199,9 @@ class Scanner:
         # Comparação é em BRL (não em cents) porque listings podem vir em
         # moedas diferentes — comparar cents direto seria errado (1 cent BRL
         # ≠ 1 cent EUR).
-        self._pl_missing, self._pl_defaults = {}, {}
+        self._pl_missing, self._pl_defaults, self._pl_dropped = {}, {}, 0
         best_by_uid, langs_seen = self._ingest_raw_listings(raw_listings, bp_index)
-        if self._check_payload_canary(exp_code, total=len(raw_listings)):
+        if self._check_payload_canary(exp_code, total=len(raw_listings), kept=len(best_by_uid)):
             return
 
         # v2.29: diagnóstico do "verde mas vazio" por idioma — o servidor
@@ -4166,7 +4214,6 @@ class Scanner:
                 f"código em --language (apelidos conhecidos: {sorted(LANGUAGE_ALIASES)})."
             )
 
-        self.stats["listings_after_filters"] += len(best_by_uid)
         log.info(f"  {len(best_by_uid)} listings após filtros (NM, {lang.upper()}, não-graded, ≥${self.min_price_usd})")
 
         # v2.26: provider PRIMÁRIO tcgcsv é bulk-por-set — sem prefill, todo
@@ -4538,7 +4585,7 @@ class Scanner:
             else (ct_variants.FIN_REVERSE if l.foil else
                   ct_variants.FIN_HOLO if is_holo_card else ct_variants.FIN_NORMAL),
             ref_compatible=self._pa(source_provider, "last_ref_exact", bool, False),
-            ref_inferred=self._pa(source_provider, "last_ref_inferred", str, "") or "",
+            ref_inferred=self._inferred_note(l, source_provider),
             ref_data_at=ref_data_at, ref_data_label=ref_label,
         )
         # B1g: contagem por fonte derivada das LINHAS efetivamente criadas (inclui trocas por idade)
@@ -5229,9 +5276,13 @@ class Scanner:
         # B1m: "REAL"/"markup" só contam com preço live VÁLIDO (nunca um VALIDATED_* com live 0/None)
         validated_real = sum(1 for o in candidates if o.validation_status == "VALIDATED_REAL" and _live_ok(o))
         validated_markup = sum(1 for o in candidates if o.validation_status == "VALIDATED_MARKUP" and _live_ok(o))
-        outros = len(candidates) - validated_real - validated_markup - stale - bad_price
+        api_err = sum(1 for o in candidates if o.validation_status == "API_ERROR")
+        moeda = sum(1 for o in candidates if o.validation_status == "MOEDA_NAO_SUPORTADA")
+        outros = len(candidates) - validated_real - validated_markup - stale - bad_price - api_err - moeda
         log.info(f"v2.0: {validated_real} REAL, {validated_markup} com markup, {stale} STALE, "
-                 f"{bad_price} preço live inválido, {outros} outros")
+                 f"{bad_price} preço live inválido, {api_err} erro de API, {moeda} moeda não suportada, {outros} outros")
+        self.stats["v2_api_error"] = api_err
+        self.stats["v2_moeda_nao_suportada"] = moeda
         if bad_price:
             log.error(f"v2.0: {bad_price} oferta(s) com preço live INVÁLIDO (0/ausente/não finito) — NÃO validadas; "
                       "seguem no XLSX com status PRECO_INVALIDO e o postprocess as manda a REVISAR")
@@ -5251,33 +5302,50 @@ def _live_ok(o) -> bool:
     return o.live_price_brl is not None and math.isfinite(o.live_price_brl) and o.live_price_brl > 0
 
 
-def validation_exit_code(opps) -> int:
-    """Código de saída da validação per-blueprint (o XLSX já foi gravado).
+# ══ TABELA DE CÓDIGOS DE SAÍDA do cardtrader_scanner.py (ÚNICA fonte; os .ps1 só referenciam) ══════════════════
+#   0    ok
+#   1    erro fatal (CT_JWT ausente/ilegível, exceção não tratada)
+#   2    argumentos inválidos (argparse / --vintage + --skip-backcatalog) OU run-guard (outro scan no mesmo --state-dir):
+#        NADA foi escrito neste run
+#   20   validação per-blueprint PARCIAL: houve API_ERROR e/ou moeda não suportada entre os candidatos (XLSX completo)
+#   21   NENHUM preço live válido (PRECO_INVALIDO / VALIDATED_* com live inválido) — XLSX completo, linhas REVISAR
+#   22   validação falhou por completo: erro de API em TODOS os candidatos — XLSX completo, nenhuma linha validada
+#   130  interrompido (Ctrl-C): XLSX parcial
+#   (97/98/99 pertencem aos launchers .ps1: pré-requisitos ausentes; o .ps1 só roda o postprocess com 20/21/22 quando o
+#    XLSX bruto foi escrito DURANTE este run — ver scripts/scanner_exit_decision.ps1)
+EXIT_VALIDATION_PARTIAL = 20
+EXIT_NO_VALID_LIVE_PRICE = 21
+EXIT_VALIDATION_API_FAILED = 22
 
-    0 = ok, inclusive "tudo STALE"/NAO_CONFIRMAVEL (resultado legítimo) ou qualquer oferta com live válido.
-    3 = nenhum live válido E existe PRECO_INVALIDO (ou VALIDATED_* com live inválido): falha de preço live.
-    2 = TODOS os candidatos em API_ERROR (falha operacional/parcial; nunca "preço inválido")."""
+
+def validation_exit_code(opps) -> int:
+    """Código de saída da validação per-blueprint (o XLSX já foi gravado). Só 0 quando TODOS os candidatos tiveram
+    resposta definitiva (inclui "tudo STALE" e PRECO_INVALIDO com ao menos um live válido); ver a tabela acima."""
     cand = [o for o in opps if getattr(o, "validation_status", None) not in (None, "", "NOT_VALIDATED")]
     if not cand:
         return 0
     validated = ("VALIDATED_REAL", "VALIDATED_MARKUP")
+    partial = any(o.validation_status in ("API_ERROR", "MOEDA_NAO_SUPORTADA") for o in cand)
     if any(_live_ok(o) for o in cand if o.validation_status in validated):
-        return 0
+        return EXIT_VALIDATION_PARTIAL if partial else 0
     if all(o.validation_status == "API_ERROR" for o in cand):
-        return 2
+        return EXIT_VALIDATION_API_FAILED
     if any(o.validation_status == "PRECO_INVALIDO" or o.validation_status in validated for o in cand):
-        return 3
-    return 0
+        return EXIT_NO_VALID_LIVE_PRICE
+    return EXIT_VALIDATION_PARTIAL if partial else 0
 
 
 def validation_exit_message(code: int) -> str:
-    if code == 3:
+    if code == EXIT_NO_VALID_LIVE_PRICE:
         return ("⛔ NENHUMA oferta teve preço live válido na validação per-blueprint (preço live 0/ausente/não finito) — "
-                "o XLSX está completo, mas as linhas ficam 'preço não validado' (REVISAR). Saída com código 3.")
-    if code == 2:
+                "o XLSX está completo, mas as linhas ficam 'preço não validado' (REVISAR). Saída com código 21.")
+    if code == EXIT_VALIDATION_API_FAILED:
         return ("⛔ A validação per-blueprint falhou por completo (erro de API em TODOS os candidatos) — o XLSX está "
-                "completo, mas NENHUMA oferta foi validada pelo preço de checkout. Saída com código 2 (falha operacional; "
+                "completo, mas NENHUMA oferta foi validada pelo preço de checkout. Saída com código 22 (falha operacional; "
                 "tente de novo).")
+    if code == EXIT_VALIDATION_PARTIAL:
+        return ("⚠️ Validação per-blueprint PARCIAL: houve erro de API e/ou moeda não suportada em alguns candidatos "
+                "(ficam REVISAR, sem preço live). O XLSX está completo. Saída com código 20.")
     return ""
 
 

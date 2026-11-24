@@ -614,7 +614,8 @@ def _recompute_margin_with_fee(df: pd.DataFrame, costs: Costs | None = None,
         df["lucro_liq"] = float("nan")
     df["net_margin"] = pd.to_numeric(df["net_margin"], errors="coerce")
     df["lucro_liq"] = pd.to_numeric(df["lucro_liq"], errors="coerce")
-    live = pd.to_numeric(df["live_brl"], errors="coerce")
+    # B1o: `live_brl` = SÓ preço de checkout validado; o preço usado na conta (live, ou o cru do scan) é `compra_brl`
+    live = pd.to_numeric(df["compra_brl"] if "compra_brl" in df.columns else df["live_brl"], errors="coerce")
     ref = pd.to_numeric(df["reference_price_brl"], errors="coerce")
     n_drift, max_drift = 0, 0.0
     cols = {c: df[c].tolist() for c in ("net_margin", "lucro_liq", "roi_aquisicao",
@@ -681,11 +682,11 @@ def enrich_df(raw_df: pd.DataFrame, hub_fee_rate: float | None = None,
         df["compra_inclui_hub"] = df["live_brl"].notna()
     else:
         df["compra_inclui_hub"] = False
-    if scan_brl_col is not None:
-        if "live_brl" not in df.columns:
-            df["live_brl"] = pd.to_numeric(raw_df[scan_brl_col], errors="coerce")
-        else:
-            df["live_brl"] = df["live_brl"].fillna(pd.to_numeric(raw_df[scan_brl_col], errors="coerce"))
+    # B1o: a coluna LIVE nunca exibe preço NÃO validado: o preço cru do scan vai para `compra_brl` (preço usado na conta)
+    if "live_brl" not in df.columns:
+        df["live_brl"] = float("nan")
+    _scan_raw = pd.to_numeric(raw_df[scan_brl_col], errors="coerce") if scan_brl_col is not None else None
+    df["compra_brl"] = df["live_brl"] if _scan_raw is None else df["live_brl"].fillna(_scan_raw)
     if scan_net_col is not None:
         scan_net = pd.to_numeric(raw_df[scan_net_col], errors="coerce")
         if "net_margin" not in df.columns:
@@ -787,7 +788,7 @@ _SHEET_COLS = ["decisao", "porque", "ref_age_dias", "ref_desatualizada", "ref_sw
                "pc_median_usd", "pc_n_sales", "pc_url",  # Ref PC (só se --pc-refs)
                "pc_status", "pc_motivo", "edicao", "acabamento",
                "set_code", "card_name", "card_number", "language",
-               "live_brl", "reference_price_brl", "net_margin", "lucro_liq",
+               "live_brl", "compra_brl", "reference_price_brl", "net_margin", "lucro_liq",
                "roi_aquisicao", "lucro_liquido_parcial", "margem_liquida_parcial",
                "roi_liquido_parcial", "liquida_status", "compra_inclui_hub",
                "pc_vendas_30d", "pc_vendas_90d", "pc_valor_90d_usd", "pc_ultima_venda",
@@ -797,7 +798,7 @@ _SHEET_RENAME = {
     "fundamental_score": "Score", "dh_score": "DH", "set_code": "Set", "card_name": "Carta",
     "pc_median_usd": "Ref PC (US$)", "pc_n_sales": "PC Nº Vendas", "pc_url": "Link PC",
     "pc_status": "PC Status", "pc_motivo": "PC Motivo", "edicao": "Edição", "acabamento": "Acabamento",
-    "card_number": "Nº", "language": "Idioma", "live_brl": "Preço CT (R$)",
+    "card_number": "Nº", "language": "Idioma", "live_brl": "Preço CT validado (R$)", "compra_brl": "Preço usado na conta (R$)",
     "reference_price_brl": "TCG (R$)", "net_margin": MARGIN_COL,
     "lucro_liq": "Lucro bruto (R$)", "roi_aquisicao": "ROI aquisição % (info)",
     "lucro_liquido_parcial": "Lucro líquido PARCIAL (R$)",
@@ -1662,7 +1663,7 @@ def build_delivery_markdown(
         for k in ("live_usd", "ct_price_usd"):
             if k in row and pd.notna(row.get(k)):
                 return float(row[k])
-        live_brl = row.get("live_brl")
+        live_brl = row.get("compra_brl") if "compra_brl" in row else row.get("live_brl")
         if fx_usd_brl and pd.notna(live_brl) and float(fx_usd_brl) > 0:
             return float(live_brl) / float(fx_usd_brl)
         return None

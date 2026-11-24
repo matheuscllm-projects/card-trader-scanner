@@ -31,28 +31,20 @@ def _o(status, live=None):
     ([_o("VALIDATED_REAL", 10.0), _o("PRECO_INVALIDO")], 0),                 # há live válido
     ([_o("STALE"), _o("STALE")], 0),                                         # tudo STALE = resultado legítimo
     ([_o("NAO_CONFIRMAVEL"), _o("STALE")], 0),
-    ([_o("PRECO_INVALIDO"), _o("PRECO_INVALIDO")], 3),
-    ([_o("PRECO_INVALIDO"), _o("STALE")], 3),
-    ([_o("VALIDATED_REAL", 0.0)], 3),                                        # VALIDATED_* com live inválido
-    ([_o("VALIDATED_MARKUP", None), _o("STALE")], 3),
-    ([_o("API_ERROR"), _o("API_ERROR")], 2),                                 # falha operacional, não "preço inválido"
-    ([_o("API_ERROR"), _o("STALE")], 0),
+    ([_o("PRECO_INVALIDO"), _o("PRECO_INVALIDO")], 21),      # B1o: códigos 20/21/22
+    ([_o("PRECO_INVALIDO"), _o("STALE")], 21),
+    ([_o("VALIDATED_REAL", 0.0)], 21),                                       # VALIDATED_* com live inválido
+    ([_o("VALIDATED_MARKUP", None), _o("STALE")], 21),
+    ([_o("API_ERROR"), _o("API_ERROR")], 22),                                # falha operacional, não "preço inválido"
+    ([_o("API_ERROR"), _o("STALE")], 20),
 ])
 def test_validation_exit_code_matrix(opps, code):
     assert sc.validation_exit_code(opps) == code
 
 
 def test_exit_messages_are_distinct():
-    assert "preço live" in sc.validation_exit_message(3) and "API" in sc.validation_exit_message(2)
-    assert "preço live" not in sc.validation_exit_message(2)
-
-
-@pytest.mark.parametrize("ps1", ["run_weekly_local.ps1", "run_priority_scan.ps1"])
-def test_launchers_still_run_postprocess_when_exit_2_or_3_and_xlsx_exists(ps1):
-    t = (REPO_ROOT / "scripts" / ps1).read_text(encoding="utf-8")
-    i = t.index("$scannerExit -in 2, 3")
-    block = t[i:i + 900]
-    assert "Test-Path -LiteralPath $rawOut" in block[:120] and "elseif ($scannerExit -ne 0)" in block
+    assert "preço live" in sc.validation_exit_message(21) and "API" in sc.validation_exit_message(22)
+    assert "preço live" not in sc.validation_exit_message(22)
 
 
 # ───────── 2) retomada: VALIDATED_* com live inválido no checkpoint é descartado ─────────

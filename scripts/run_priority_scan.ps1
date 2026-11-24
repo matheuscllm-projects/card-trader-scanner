@@ -131,6 +131,8 @@ $scannerArgs = @(
     '--sets'
 ) + $setCodes
 
+. (Join-Path $PSScriptRoot 'scanner_exit_decision.ps1')
+$runStart = Get-Date
 & $py @scannerArgs 2> $stderrFile | Out-Null
 $scannerExit = $LASTEXITCODE
 
@@ -142,14 +144,14 @@ if ((Test-Path -LiteralPath $stderrFile) -and (Get-Item -LiteralPath $stderrFile
 
 "--- SCANNER exit=$scannerExit at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ---" | Add-Content -LiteralPath $logFile -Encoding utf8
 
-if (($scannerExit -in 2, 3) -and (Test-Path -LiteralPath $rawOut)) {
-    # B1n: 2 = validacao per-blueprint falhou por completo (API); 3 = nenhum preco live valido. O XLSX foi gravado
-    # completo: o postprocess TEM de rodar (o relatorio mostra os REVISAR "preco nao validado"). Sem XLSX aborta abaixo.
-    "SCANNER exit=$scannerExit com XLSX gravado: seguindo para o postprocess (linhas sem preco live ficam REVISAR)" | Add-Content -LiteralPath $logFile -Encoding utf8
-}
-elseif ($scannerExit -ne 0) {
+# B1o: decisao testavel (scripts/scanner_exit_decision.ps1): com exit 20/21/22 so segue se o XLSX bruto foi escrito
+# DURANTE este run; exit 2 (args/run-guard) e qualquer outro abortam.
+if ((Get-PostprocessDecision -ExitCode $scannerExit -RawOut $rawOut -RunStart $runStart) -ne 'run') {
     "SCANNER FAILED exit=$scannerExit" | Add-Content -LiteralPath $logFile -Encoding utf8
     exit $scannerExit
+}
+if ($scannerExit -ne 0) {
+    "SCANNER exit=$scannerExit com XLSX gravado neste run: seguindo para o postprocess (linhas sem preco live ficam REVISAR)" | Add-Content -LiteralPath $logFile -Encoding utf8
 }
 
 # -------------------------------------------------------------------
