@@ -370,7 +370,8 @@ def build_rows(expansion: dict, blueprints: list[dict], offers_by_bp: dict,
     contagem própria — booster box nunca vira linha."""
     stats = {"blueprints": 0, "selados_pulados": 0, "sem_oferta_nm": 0,
              "sem_ref_tcg": 0, "abaixo_piso": 0, "avaliadas": 0,
-             "ofertas_moeda_pulada": 0, "resgatadas_join2": 0}
+             "ofertas_moeda_pulada": 0, "resgatadas_join2": 0,
+                   "sem_preco_valido": 0}
     brl_per_usd = rates["BRL"]
     rows = []
     semref: list[dict] = []
@@ -424,6 +425,10 @@ def build_rows(expansion: dict, blueprints: list[dict], offers_by_bp: dict,
         tcg_brl = tcg_usd * brl_per_usd
         margin, roi = margem_venda_roi(ct_brl, tcg_brl)
         if margin is None:
+            stats["sem_preco_valido"] += 1
+            print(f"AVISO sem preço válido: {carta_label(bp)} ({expansion.get('name', '')}) "
+                  f"ct_brl={ct_brl:.2f} tcg_usd={tcg_usd:.2f} — fora da tabela, contado no rodapé",
+                  file=sys.stderr, flush=True)
             continue
         stats["avaliadas"] += 1
         rows.append({
@@ -512,7 +517,8 @@ def build_markdown(rows: list[dict], stats: dict, meta: dict) -> str:
         f"{stats['sem_ref_tcg']} sem referência TCG (join `tcg_player_id` vazio ou sem market price — ficam FORA, nunca inventamos) · "
         f"{stats.get('resgatadas_join2', 0)} com referência recuperada pelo join secundário "
         f"(nome+número, match único; contadas antes do piso) · "
-        f"{stats['abaixo_piso']} abaixo do piso · **{stats['avaliadas']} avaliadas**"
+        f"{stats['abaixo_piso']} abaixo do piso · {stats.get('sem_preco_valido', 0)} sem preço válido (ct ou ref ≤ 0) · "
+        f"**{stats['avaliadas']} avaliadas**"
     )
     if stats.get("ofertas_moeda_pulada"):
         out.append(f"⚠️ {stats['ofertas_moeda_pulada']} ofertas puladas por moeda sem câmbio conhecido.")
@@ -639,7 +645,8 @@ def main(argv: list[str] | None = None) -> int:
     all_semref: list[dict] = []
     total_stats = {"blueprints": 0, "selados_pulados": 0, "sem_oferta_nm": 0,
                    "sem_ref_tcg": 0, "abaixo_piso": 0, "avaliadas": 0,
-                   "ofertas_moeda_pulada": 0, "resgatadas_join2": 0}
+                   "ofertas_moeda_pulada": 0, "resgatadas_join2": 0,
+                   "sem_preco_valido": 0}
     for i, exp in enumerate(targets, 1):
         print(f"[scan] ({i}/{len(targets)}) {exp.get('code')} — {exp.get('name')}…", flush=True)
         bps = fetch_blueprints(exp["id"], headers)

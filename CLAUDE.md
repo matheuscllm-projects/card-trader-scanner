@@ -528,7 +528,10 @@ Se um dia você quiser dar ainda mais tempo a todas, o `--per-set-timeout 25`
   **match único obrigatório e só blueprint SEM versão** (variante Gold/Alt Art
   nunca entra) — rotulado por linha na coluna `join` do CSV. O que sobrar fica
   **FORA com contagem explícita** — nunca fuzzy por nome, nunca preço inventado.
-- **Convenções:** margem BRUTA base compra `(TCG_BRL − CT_BRL)/CT_BRL`;
+- **Convenções:** a **margem sobre a VENDA** `(TCG_BRL − CT_BRL)/TCG_BRL` decide
+  o corte (`--threshold` 0.30); o **ROI** `(TCG_BRL − CT_BRL)/CT_BRL` é só
+  informativo (coluna "ROI aquisição %", não filtra nem ordena). Ct ou tcg ≤ 0
+  → linha fora, contada em "sem preço válido" e avisada no stderr.
   `--threshold` em **FRAÇÃO** (0.30; passar `30` aborta com erro); piso de
   relevância na referência (`--min-price-usd 10`); NM por match **EXATO**
   `== "Near Mint"`; graded/assinada nunca entram; oferta <50% da referência vai
