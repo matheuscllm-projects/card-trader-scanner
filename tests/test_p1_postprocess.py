@@ -26,13 +26,14 @@ def _raw(**over):
         "Condição": "NM", "Qtd": 1, "Scan R$ (raw)": 60.0, "TCG Market (BRL)": 100.0,
         "TCG Market (USD)": 18.0, "Validation Status": "NOT_VALIDATED",
         "Variant": "holofoil", "Ref Compatível": "Sim", "Link CardTrader": CT, "Link TCG": TCG, "Edição": "Unlimited",
+        "Data Ref.": __import__("datetime").date.today().isoformat(), "Rótulo Data Ref.": "dado de",
     }
     base.update(over)
     return pd.DataFrame([{k: v for k, v in base.items() if v is not None}])
 
 
 def _enrich(raw, **kw):
-    return pp.enrich_df(raw, **kw)
+    return pp.enrich_df(raw, **kw).assign(ref_age_dias=0.0)
 
 
 def _row(df, i=0):

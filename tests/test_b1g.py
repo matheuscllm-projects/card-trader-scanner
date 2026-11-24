@@ -310,7 +310,7 @@ def test_property_full_path_with_hand_written_oracle():
         if om.inferred is None:
             assert ct not in (None, "", "Promo"), ("promo/vazia nunca é 'Sim' (acabamento não declarado)", ct, m.key, era, code)
             want = decl if decl is not None else "normal"          # inconclusivo sem inferência = normal (política)
-            if code == "det" and ct in (None, "", "Promo") and ct != "Non-Holo":
+            if code == "det" and ct in (None, "", "Promo"):
                 want = "holo" if fin == "holo" else want
             assert fin == want, ("'Sim' com acabamento diferente do declarado", ct, ref, m.key, era, code)
         # nunca OK com outra chave quando a chave CERTA (acabamento declarado) existe SEM preço

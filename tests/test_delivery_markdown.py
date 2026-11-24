@@ -53,7 +53,7 @@ def _raw_df():
 
 def _enriched(cfg=None):
     cfg = cfg or pp.DecisionConfig()
-    return pp.enrich_df(_raw_df(), hub_fee_rate=cfg.hub_fee_rate), cfg
+    return pp.enrich_df(_raw_df(), hub_fee_rate=cfg.hub_fee_rate).assign(ref_age_dias=0.0), cfg
 
 
 def test_header_exact():
@@ -137,7 +137,7 @@ def test_flag_marks_revisar_as_validar_manual():
     # (240−187)/240 ≈ 22% (entre revisar_min 20% e min_net 25% default) → REVISAR.
     raw.loc[0, "LIVE R$ (real)"] = 187.0
     raw.loc[0, "TCG Market (BRL)"] = 240.0
-    df = with_liquidity(pp.enrich_df(raw, hub_fee_rate=0.0))
+    df = with_liquidity(pp.enrich_df(raw, hub_fee_rate=0.0).assign(ref_age_dias=0.0))
     md = pp.build_delivery_markdown(df, pp.DecisionConfig(), fx_usd_brl=5.0)
     # a linha do Plusle (REVISAR) deve trazer o flag de cautela
     plusle_line = [ln for ln in md.splitlines() if "Plusle" in ln][0]

@@ -353,14 +353,13 @@ def classify_decision(row, cfg: DecisionConfig, check_liquidity: bool = True):
         return "REVISAR", ("referência de variante/edição não certificada pelo scanner "
                            "(coluna 'Ref Compatível' ausente ou ≠ Sim)")
     # B1f: referencia velha demais (limite configuravel) nunca vira COMPRA; a margem segue exibida.
-    if "ref_age_dias" in row:      # coluna presente (write_report sempre a cria); ausente = chamada direta de teste
-        age = _num(row.get("ref_age_dias"))
-        if age is None:
-            return "REVISAR", (f"idade da referência desconhecida (a fonte não informou a data do dado); "
-                               f"margem {nm:.0%}")
-        if age > cfg.max_ref_age_days:
-            return "REVISAR", (f"referência desatualizada ({age:.0f} dias); máximo {cfg.max_ref_age_days:g}; "
-                               f"margem {nm:.0%} sobre preço velho")
+    age = _num(row.get("ref_age_dias"))      # B1j-M2: coluna ausente = idade desconhecida (nunca pula a guarda)
+    if age is None or age < 0:
+        return "REVISAR", (f"idade da referência desconhecida (a fonte não informou a data do dado); "
+                           f"margem {nm:.0%}")
+    if age > cfg.max_ref_age_days:
+        return "REVISAR", (f"referência desatualizada ({age:.0f} dias); máximo {cfg.max_ref_age_days:g}; "
+                           f"margem {nm:.0%} sobre preço velho")
     if not check_liquidity:
         return "COMPRA", ""
     ok, liq = liquidity_verdict(row, cfg)

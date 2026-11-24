@@ -2499,11 +2499,11 @@ class TcgCsvFallbackProvider(PricingProvider):
             variant = ct_variants.tcgcsv_variant(sub)
             if variant == ct_variants.DESCONHECIDO:
                 continue  # subtype desconhecido → ignora (não inventa variante)
-            variants_by_pid[pid][variant] = {
+            ct_variants.add_price_row(variants_by_pid[pid], variant, sub, {
                 "market": r.get("marketPrice"),
                 "low": r.get("lowPrice"),
                 "mid": r.get("midPrice"),
-            }
+            })
 
         index: dict[str, dict] = {}
         pid_map: dict[str, dict] = {}
@@ -3898,8 +3898,7 @@ class Scanner:
         rescued = len(handled)
         prim = self._primary_name()
         src = self.__dict__.get("_set_src") or {}
-        self._set_by_source = ({"tcgcsv": sum(src.values())} if prim == "tcgcsv"
-                               else {prim: src.get(prim, 0), "tcgcsv": src.get("tcgcsv", 0)})
+        self._set_by_source = {prim: src.get(prim, 0), "tcgcsv": src.get("tcgcsv", 0)}
         for k, v in src.items():
             if k not in self._set_by_source:
                 self._set_by_source[k] = v

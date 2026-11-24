@@ -41,4 +41,5 @@ def ref_age_days(at, label, now: datetime) -> Optional[int]:
     d = parse_ref_date(at, now.tzinfo)
     if d is None:
         return None
-    return (now.date() - d).days
+    days = (now.date() - d).days
+    return days if days >= 0 else None      # B1j-B1: data futura = idade desconhecida
