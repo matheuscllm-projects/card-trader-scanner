@@ -57,7 +57,12 @@ def _scan(scanner, code, tmp_path):
 
 
 def _cards(n, set_code="asc"):
-    return [_listing(f"Card {k}", f"{k:03d}/100", set_code=set_code, rarity="Holo Rare")
+    # ids explícitos e únicos: o helper `_listing` usa hash() de 16 bits, que
+    # colide aleatoriamente (PYTHONHASHSEED) e faz o dedup por uid engolir linhas.
+    import dataclasses
+    return [dataclasses.replace(
+                _listing(f"Card {k}", f"{k:03d}/100", set_code=set_code, rarity="Holo Rare"),
+                product_id=10_000 + k, blueprint_id=20_000 + k)
             for k in range(1, n + 1)]
 
 
