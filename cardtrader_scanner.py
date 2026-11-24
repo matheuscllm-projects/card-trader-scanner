@@ -3538,9 +3538,11 @@ class Scanner:
         if missing:
             pm = self.__dict__.setdefault("_pl_missing", {})
             pt = self.__dict__.setdefault("_pl_missing_total", {})
+            ex = self.__dict__.setdefault("_pl_example", {})
             for k in missing:
                 pm[k] = pm.get(k, 0) + 1
                 pt[k] = pt.get(k, 0) + 1
+                ex.setdefault(k, raw.get("id"))        # B1q: 1 listing de exemplo por chave, p/ diagnóstico do canário
             self.__dict__["_pl_dropped"] = self.__dict__.get("_pl_dropped", 0) + 1
             self._count("skipped_unexpected_payload")
             return None
@@ -3696,6 +3698,10 @@ class Scanner:
             return False
         log.error(f"  ⛔ {exp_code}: formato da API mudou: chave {key} ausente em {cnt}/{total} listings — "
                   f"set NÃO avaliado (falha operacional, não 'sem cobertura')")
+        _ex = self.__dict__.get("_pl_example") or {}
+        log.error(f"     diagnóstico {exp_code}: chaves ausentes por contagem: "
+                  + ", ".join(f"{k}={n}" for k, n in top) + f"; {dropped} listing(s) descartados de {total}; "
+                  f"exemplo: listing id {_ex.get(key)} (sem a chave {key})")
         self._count("listings_canary_discarded", kept)
         self._set_outcome("operational_failure", f"api_format_changed_{key}")
         return True
@@ -4199,7 +4205,7 @@ class Scanner:
         # Comparação é em BRL (não em cents) porque listings podem vir em
         # moedas diferentes — comparar cents direto seria errado (1 cent BRL
         # ≠ 1 cent EUR).
-        self._pl_missing, self._pl_defaults, self._pl_dropped = {}, {}, 0
+        self._pl_missing, self._pl_defaults, self._pl_dropped, self._pl_example = {}, {}, 0, {}
         best_by_uid, langs_seen = self._ingest_raw_listings(raw_listings, bp_index)
         if self._check_payload_canary(exp_code, total=len(raw_listings), kept=len(best_by_uid)):
             return
@@ -4815,6 +4821,7 @@ class Scanner:
             f"{'não graduada' if self.exclude_graded else 'graduadas INCLUÍDAS'}; sem Trainer/Galarian Gallery (TG/GG); "
             f"piso de preço US$ {self.min_price_usd:g}; deduplicação por oferta (mesmo produto+vendedor)")
         self.noref_rows: list[dict] = []     # B1: ofertas sem referência compatível
+        skipped_info: list[str] = []         # B1q: sets pulados pela skip-list (decisão registrada, visível na entrega)
         self.stats.setdefault("listings_sem_ref_compativel", 0)
         for idx, exp in enumerate(expansions, 1):
             exp_code = exp.get("code", "")
@@ -4830,6 +4837,9 @@ class Scanner:
                 # PR-F: reason pode ser dict {reason, added_at} ou str legada.
                 reason = _skip_reason_str(reasons_map.get(exp_code)) or "?"
                 log.warning(f"⏭️  Pulando {exp.get('name')} ({exp_code}) — skip-list (motivo: {reason})")
+                _e = reasons_map.get(exp_code)
+                _e = _e if isinstance(_e, dict) else {}
+                skipped_info.append(f"{exp_code}: {reason} | {str(_e.get('added_at') or '?')[:10]} | {_e.get('provider') or '?'}")
                 continue
             # v2.6 (2026-05-17): snapshot per-set stats antes do scan_expansion
             # pra calcular DIFFs (self.stats é cumulativo). Permite registrar
@@ -4942,6 +4952,7 @@ class Scanner:
         self.stats["sets_complete_with_unpriced"] = (
             "; ".join(f"{o['set']}: {o['unpriced']}/{o['total']} sem preço" for o in cu)
             or "(nenhum)")
+        self.stats["sets_skip_list"] = "; ".join(skipped_info) or "(nenhum)"
         self.stats["listings_sem_preco"] = len(self.unpriced_rows)
         self.stats["saude_fonte_principal"] = self._source_health_line() or ""
         self.stats["cobertura_baixa"] = " | ".join(self._low_coverage())
@@ -5313,6 +5324,7 @@ def _live_ok(o) -> bool:
 #   23   scan concluído, mas com set(s) em FALHA OPERACIONAL (canário de formato, 5xx, rede, disjuntor, timeout): XLSX
 #        gravado; esses sets NÃO foram avaliados (tentar de novo). Vale também com --validate-top 0
 #   130  interrompido (Ctrl-C): XLSX parcial
+#   96   (launchers .ps1) o POSTPROCESS falhou (exit != 0): nenhuma entrega foi gerada; vence o código do scanner
 #   Precedência com mais de uma condição: 22 > 21 > 23 > 20 (130 vence tudo); TODAS as mensagens são impressas
 #   (97/98/99 pertencem aos launchers .ps1: pré-requisitos ausentes; o .ps1 só roda o postprocess com 20/21/22 quando o
 #    XLSX bruto foi escrito DURANTE este run — ver scripts/scanner_exit_decision.ps1)
@@ -5342,14 +5354,13 @@ def validation_exit_code(opps) -> int:
 def validation_exit_message(code: int) -> str:
     if code == EXIT_NO_VALID_LIVE_PRICE:
         return ("⛔ NENHUMA oferta teve preço live válido na validação per-blueprint (preço live 0/ausente/não finito) — "
-                "o XLSX está completo, mas as linhas ficam 'preço não validado' (REVISAR). Saída com código 21.")
+                "o XLSX está completo, mas as linhas ficam 'preço não validado' (REVISAR).")
     if code == EXIT_VALIDATION_API_FAILED:
         return ("⛔ A validação per-blueprint falhou por completo (erro de API em TODOS os candidatos) — o XLSX está "
-                "completo, mas NENHUMA oferta foi validada pelo preço de checkout. Saída com código 22 (falha operacional; "
-                "tente de novo).")
+                "completo, mas NENHUMA oferta foi validada pelo preço de checkout (falha operacional; tente de novo).")
     if code == EXIT_VALIDATION_PARTIAL:
         return ("⚠️ Validação per-blueprint PARCIAL: houve erro de API e/ou moeda não suportada em alguns candidatos "
-                "(ficam REVISAR, sem preço live). O XLSX está completo. Saída com código 20.")
+                "(ficam REVISAR, sem preço live). O XLSX está completo.")
     return ""
 
 
@@ -5361,12 +5372,16 @@ def run_exit_decision(opps, set_outcomes, validate_on: bool = True):
     if bad:
         msgs.append(f"⛔ {len(bad)} set(s) NÃO avaliados por falha operacional: "
                     + ", ".join(f"{o['set']} ({o.get('reason', '')})" for o in bad)
-                    + ". O XLSX foi gravado; tente de novo esses sets. Saída com código 23.")
+                    + ". O XLSX foi gravado; tente de novo esses sets.")
     if vcode in (EXIT_VALIDATION_API_FAILED, EXIT_NO_VALID_LIVE_PRICE):
-        return vcode, msgs
-    if bad:
-        return EXIT_SET_OPERATIONAL_FAILURE, msgs
-    return vcode, msgs
+        code = vcode
+    elif bad:
+        code = EXIT_SET_OPERATIONAL_FAILURE
+    else:
+        code = vcode
+    if code:
+        msgs.append(f"Código de saída efetivo: {code}")     # B1q: UMA linha final com o código efetivo
+    return code, msgs
 
 
 def print_top_opportunities(opps_by_net, validated: bool = True) -> None:

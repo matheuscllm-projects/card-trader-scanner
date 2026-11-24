@@ -75,7 +75,7 @@ def test_run_exit_decision_precedence(opps, outs, validate, code):
 def test_run_exit_decision_prints_every_condition():
     _, msgs = sc.run_exit_decision([_o("VALIDATED_REAL", 10.0), _o("API_ERROR")], OP, True)
     text = "\n".join(msgs)
-    assert "código 20" in text and "código 23" in text and "uf" in text
+    assert "PARCIAL" in text and "uf" in text and msgs[-1] == "Código de saída efetivo: 23"
 
 
 def test_main_exits_23_when_a_set_failed_operationally_and_xlsx_is_written(tmp_path, monkeypatch):

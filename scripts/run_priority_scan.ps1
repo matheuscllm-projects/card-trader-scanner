@@ -36,6 +36,7 @@ $env:PYTHONUNBUFFERED  = '1'
 
 $base = 'C:\Users\mathe\Meu Drive\OBSIDIAN\01 - Projetos\TCG & Exporta' + [char]0xE7 + [char]0xE3 + 'o\CardTrader Scanner'
 $repo = if ($env:CT_SCANNER_REPO) { $env:CT_SCANNER_REPO } else { $base }   # override so p/ teste
+if ($env:CT_SCANNER_REPO) { Write-Warning "CT_SCANNER_REPO ativo: usando repo alternativo '$repo' (so para teste; o repo real NAO esta sendo usado)" }
 if (-not (Test-Path -LiteralPath $repo)) {
     Write-Error "Repo path not found: $repo"
     exit 99
@@ -200,5 +201,11 @@ if ($postExit -ne 0) {
 
 "=== DONE $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') scanner=$scannerExit post=$postExit ===" | Add-Content -LiteralPath $logFile -Encoding utf8
 
-# B1p: o launcher termina com o codigo do scanner (23 = set(s) em falha operacional etc.), nunca 0 silencioso
+# B1p/B1q: o launcher termina com o codigo do scanner (23 = set(s) em falha operacional etc.), nunca 0 silencioso;
+# postprocess falho = 96 ("nenhuma entrega gerada"), com precedencia sobre o codigo do scanner.
+if ($postExit -ne 0) {
+    "postprocess falhou: nenhuma entrega gerada (postprocess exit=$postExit, scanner exit=$scannerExit)" | Add-Content -LiteralPath $logFile -Encoding utf8
+    Write-Error "postprocess falhou: nenhuma entrega gerada (exit=$postExit)"
+    exit 96
+}
 if ($scannerExit -ne 0) { exit $scannerExit }

@@ -955,6 +955,7 @@ def build_summary(df: pd.DataFrame, cfg: DecisionConfig, extra_blocks: dict | No
             pass
     rows = [
         *origin,
+        *[("Desfecho dos sets", x) for _, x in _set_outcome_parts(scan_stats)],
         ("Linhas neste relatório (precificadas + sem preço + sem ref. compatível)", total),
         ("Total deals exportados (COMPRA + REVISAR)", c["COMPRA"] + c["REVISAR"]),
         ("COMPRA", pct(c["COMPRA"])),
@@ -1172,11 +1173,11 @@ def _read_scan_stats(input_path) -> dict:
     return out
 
 
-def _set_outcome_header(scan_stats: dict | None) -> str:
-    """B1p: aviso visível no CABEÇALHO da entrega com os sets que NÃO foram avaliados (falha operacional) e os sem
-    cobertura. None = chamador sem Stats (sem aviso); dict sem as chaves (XLSX antigo) = 'indisponível'."""
+def _set_outcome_parts(scan_stats: dict | None) -> list[tuple[str, str]]:
+    """B1p/B1q: avisos de desfecho por set, [(tipo, texto puro)], tipo = 'op' (falha operacional) | 'info'.
+    None = chamador sem Stats (sem aviso); dict sem as chaves (XLSX antigo) = 'indisponível'."""
     if scan_stats is None:
-        return ""
+        return []
 
     def items(key):
         v = scan_stats.get(key)
@@ -1186,16 +1187,29 @@ def _set_outcome_header(scan_stats: dict | None) -> str:
         if v in ("", "(nenhum)"):
             return []
         return [tuple(p.split(": ", 1)) if ": " in p else (p, "") for p in v.split("; ")]
-    op, nc = items("sets_operational_failure"), items("sets_no_coverage")
+    op, nc, sk = items("sets_operational_failure"), items("sets_no_coverage"), items("sets_skip_list")
     if op is None and nc is None:
-        return "_⚠ desfecho por set indisponível (XLSX do scanner sem aba Stats/desfechos): não dá para afirmar que todos os sets foram avaliados._"
+        return [("info", "⚠ desfecho por set indisponível (XLSX do scanner sem aba Stats/desfechos): "
+                         "não dá para afirmar que todos os sets foram avaliados.")]
     out = []
     if op:
-        out.append(f"**⚠ {len(op)} set(s) NÃO avaliados por falha operacional: "
-                   + ", ".join(f"{s} ({r})" if r else s for s, r in op) + " — tentar de novo; a ausência de deals nesses sets não significa nada.**")
+        out.append(("op", f"⚠ {len(op)} set(s) NÃO avaliados por falha operacional: "
+                    + ", ".join(f"{s} ({r})" if r else s for s, r in op)
+                    + " — tentar de novo; a ausência de deals nesses sets não significa nada."))
     if nc:
-        out.append(f"_{len(nc)} set(s) sem cobertura: " + ", ".join(f"{s} ({r})" if r else s for s, r in nc) + "._")
-    return "\n".join(out)
+        out.append(("info", f"{len(nc)} set(s) sem cobertura: " + ", ".join(f"{s} ({r})" if r else s for s, r in nc) + "."))
+    if sk:
+        def one(s, r):
+            motivo, data, prov = (r.split(" | ") + ["?", "?", "?"])[:3]
+            return f"{s} (sem cobertura registrada em {data}; motivo {motivo}; provider {prov})"
+        out.append(("info", f"{len(sk)} set(s) pulados pela skip-list (decisão registrada, não avaliados neste run): "
+                    + ", ".join(one(s, r) for s, r in sk) + "."))
+    return out
+
+
+def _set_outcome_header(scan_stats: dict | None) -> str:
+    """Markdown do aviso de sets (cabeçalho da entrega .md/terminal)."""
+    return "\n".join(f"**{x}**" if k == "op" else f"_{x}_" for k, x in _set_outcome_parts(scan_stats))
 
 
 def _origin_lines(scan_stats: dict | None, n_priced: int) -> list[str]:
