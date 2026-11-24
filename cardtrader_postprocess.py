@@ -305,6 +305,20 @@ def liquidity_verdict(row, cfg: DecisionConfig):
 def classify_decision(row, cfg: DecisionConfig, check_liquidity: bool = True):
     """Aplica regra mecanica. Retorna (decisao, porque). O chase NAO participa.
     `check_liquidity=False` so serve p/ escolher quais linhas consultar no PriceCharting."""
+    val = str(row.get("validation_status", "")).upper()
+    # B1n: falha de preço LIVE (PRECO_INVALIDO, ou VALIDATED_* sem preço de checkout válido) não é falta de referência
+    # nem "abaixo do piso": vem ANTES de SEM REF e de qualquer corte de margem; a linha segue visível em REVISAR.
+    _lv = row.get("live_brl")
+    _live_bad = _lv is not None and not (isinstance(_lv, float) and pd.isna(_lv)) and not ((_num(_lv) or 0) > 0)
+    _sm0 = row.get("sem_margem_motivo")
+    _has_margin = not (isinstance(_sm0, str) and _sm0.strip())      # margem calculada (do preço cru do scan)
+    _gallery = bool(row.get("trainer_gallery_potential_fp", False))   # TG/GG segue NAO (falso positivo independente do preço)
+    if not _gallery and (val == "PRECO_INVALIDO" or (val in ("VALIDATED_REAL", "VALIDATED_MARKUP") and (
+            _live_bad or (not _is_truthy_flag(row.get("compra_inclui_hub")) and _has_margin)))):
+        _nm = _num(row.get("net_margin"))
+        _m = f"margem {_nm:.0%} sobre o preço cru do scan" if _nm is not None else "sem margem calculável"
+        return "REVISAR", (f"preço não validado (preço live inválido/ausente: LIVE R$ ausente ou ≤ 0 no checkout "
+                           f"per-blueprint); {_m}")
     sm = row.get("sem_margem_motivo")   # compute devolveu "sem margem": nunca herda numero do XLSX
     if isinstance(sm, str) and sm.strip():
         return "SEM REF", sm.strip()
@@ -344,9 +358,6 @@ def classify_decision(row, cfg: DecisionConfig, check_liquidity: bool = True):
         return "REVISAR", f"Margem {nm:.0%} OK mas lucro R${profit:.0f} < R${cfg.min_lucro_liq:.0f}"
     if val == "MARKUP_TIER_ANOMALOUS" or val == "ANOMALOUS_MARKUP":
         return "REVISAR", f"Markup anomalo (>45%); margem {nm:.0%}"
-    if val == "PRECO_INVALIDO":      # B1m: preço live 0/ausente/não finito na validação: visível, nunca COMPRA, nunca "sem referência"
-        return "REVISAR", (f"preço não validado (preço live inválido no checkout per-blueprint); "
-                           f"margem {nm:.0%} sobre preço cru do scan")
     if val not in ("VALIDATED_REAL", "VALIDATED_MARKUP"):
         return "REVISAR", f"Validation {val or 'ausente'}; margem {nm:.0%} (preço sem checkout real)"
     if not _is_truthy_flag(row.get("compra_inclui_hub")):   # VALIDATED sem LIVE na linha = sem preço de checkout
@@ -537,15 +548,17 @@ def apply_card_hyperlinks(ws, df):
                 cell.hyperlink = v
                 cell.font = HYPERLINK_FONT
     # Preço CT → Link CT (clicar no preço abre a página do card no CT pra conferir)
-    if "Preço CT (R$)" in cols and "Link CT" in cols:
-        price_idx = cols.index("Preço CT (R$)") + 1
-        link_idx = cols.index("Link CT") + 1
-        for ri in range(2, len(df) + 2):
-            url = ws.cell(row=ri, column=link_idx).value
-            if isinstance(url, str) and url.startswith("http"):
-                c = ws.cell(row=ri, column=price_idx)
-                c.hyperlink = url
-                c.font = HYPERLINK_FONT
+    # (B1p: as colunas de preço foram renomeadas no B1m/B1o; o alvo é o mesmo Link CT)
+    for price_col in ("Preço CT validado (R$)", "Preço usado na conta (R$)"):
+        if price_col in cols and "Link CT" in cols:
+            price_idx = cols.index(price_col) + 1
+            link_idx = cols.index("Link CT") + 1
+            for ri in range(2, len(df) + 2):
+                url = ws.cell(row=ri, column=link_idx).value
+                if isinstance(url, str) and url.startswith("http"):
+                    c = ws.cell(row=ri, column=price_idx)
+                    c.hyperlink = url
+                    c.font = HYPERLINK_FONT
     # TCG (R$) → Link TCG (clicar no preço abre a página TCGplayer pra conferir)
     if "TCG (R$)" in cols and "Link TCG" in cols:
         tprice_idx = cols.index("TCG (R$)") + 1
@@ -603,7 +616,8 @@ def _recompute_margin_with_fee(df: pd.DataFrame, costs: Costs | None = None,
         df["lucro_liq"] = float("nan")
     df["net_margin"] = pd.to_numeric(df["net_margin"], errors="coerce")
     df["lucro_liq"] = pd.to_numeric(df["lucro_liq"], errors="coerce")
-    live = pd.to_numeric(df["live_brl"], errors="coerce")
+    # B1o: `live_brl` = SÓ preço de checkout validado; o preço usado na conta (live, ou o cru do scan) é `compra_brl`
+    live = pd.to_numeric(df["compra_brl"] if "compra_brl" in df.columns else df["live_brl"], errors="coerce")
     ref = pd.to_numeric(df["reference_price_brl"], errors="coerce")
     n_drift, max_drift = 0, 0.0
     cols = {c: df[c].tolist() for c in ("net_margin", "lucro_liq", "roi_aquisicao",
@@ -663,15 +677,18 @@ def enrich_df(raw_df: pd.DataFrame, hub_fee_rate: float | None = None,
     scan_brl_col = next((c for c in raw_df.columns if str(c).strip() == "Scan R$ (raw)"), None)
     scan_net_col = next((c for c in raw_df.columns if str(c).strip() == "Net Margin % (scan)"), None)
     if "live_brl" in df.columns:
-        df["live_brl"] = pd.to_numeric(df["live_brl"], errors="coerce")
+        # B1n: LIVE <= 0 / não finito NUNCA é preço de checkout (era o LIVE 0,0 do bug do B1m): vira ausente, cai no
+        # preço cru do scan (compra_inclui_hub=False) e a decisão manda a REVISAR "preço não validado"
+        _live = pd.to_numeric(df["live_brl"], errors="coerce")
+        df["live_brl"] = _live.where(_live > 0)
         df["compra_inclui_hub"] = df["live_brl"].notna()
     else:
         df["compra_inclui_hub"] = False
-    if scan_brl_col is not None:
-        if "live_brl" not in df.columns:
-            df["live_brl"] = pd.to_numeric(raw_df[scan_brl_col], errors="coerce")
-        else:
-            df["live_brl"] = df["live_brl"].fillna(pd.to_numeric(raw_df[scan_brl_col], errors="coerce"))
+    # B1o: a coluna LIVE nunca exibe preço NÃO validado: o preço cru do scan vai para `compra_brl` (preço usado na conta)
+    if "live_brl" not in df.columns:
+        df["live_brl"] = float("nan")
+    _scan_raw = pd.to_numeric(raw_df[scan_brl_col], errors="coerce") if scan_brl_col is not None else None
+    df["compra_brl"] = df["live_brl"] if _scan_raw is None else df["live_brl"].fillna(_scan_raw)
     if scan_net_col is not None:
         scan_net = pd.to_numeric(raw_df[scan_net_col], errors="coerce")
         if "net_margin" not in df.columns:
@@ -773,7 +790,7 @@ _SHEET_COLS = ["decisao", "porque", "ref_age_dias", "ref_desatualizada", "ref_sw
                "pc_median_usd", "pc_n_sales", "pc_url",  # Ref PC (só se --pc-refs)
                "pc_status", "pc_motivo", "edicao", "acabamento",
                "set_code", "card_name", "card_number", "language",
-               "live_brl", "reference_price_brl", "net_margin", "lucro_liq",
+               "live_brl", "compra_brl", "reference_price_brl", "net_margin", "lucro_liq",
                "roi_aquisicao", "lucro_liquido_parcial", "margem_liquida_parcial",
                "roi_liquido_parcial", "liquida_status", "compra_inclui_hub",
                "pc_vendas_30d", "pc_vendas_90d", "pc_valor_90d_usd", "pc_ultima_venda",
@@ -783,7 +800,7 @@ _SHEET_RENAME = {
     "fundamental_score": "Score", "dh_score": "DH", "set_code": "Set", "card_name": "Carta",
     "pc_median_usd": "Ref PC (US$)", "pc_n_sales": "PC Nº Vendas", "pc_url": "Link PC",
     "pc_status": "PC Status", "pc_motivo": "PC Motivo", "edicao": "Edição", "acabamento": "Acabamento",
-    "card_number": "Nº", "language": "Idioma", "live_brl": "Preço CT (R$)",
+    "card_number": "Nº", "language": "Idioma", "live_brl": "Preço CT validado (R$)", "compra_brl": "Preço usado na conta (R$)",
     "reference_price_brl": "TCG (R$)", "net_margin": MARGIN_COL,
     "lucro_liq": "Lucro bruto (R$)", "roi_aquisicao": "ROI aquisição % (info)",
     "lucro_liquido_parcial": "Lucro líquido PARCIAL (R$)",
@@ -938,6 +955,7 @@ def build_summary(df: pd.DataFrame, cfg: DecisionConfig, extra_blocks: dict | No
             pass
     rows = [
         *origin,
+        *[("Desfecho dos sets", x) for _, x in _set_outcome_parts(scan_stats)],
         ("Linhas neste relatório (precificadas + sem preço + sem ref. compatível)", total),
         ("Total deals exportados (COMPRA + REVISAR)", c["COMPRA"] + c["REVISAR"]),
         ("COMPRA", pct(c["COMPRA"])),
@@ -1153,6 +1171,45 @@ def _read_scan_stats(input_path) -> dict:
         if len(r) >= 2 and pd.notna(r.iloc[0]):
             out[str(r.iloc[0]).strip()] = r.iloc[1]
     return out
+
+
+def _set_outcome_parts(scan_stats: dict | None) -> list[tuple[str, str]]:
+    """B1p/B1q: avisos de desfecho por set, [(tipo, texto puro)], tipo = 'op' (falha operacional) | 'info'.
+    None = chamador sem Stats (sem aviso); dict sem as chaves (XLSX antigo) = 'indisponível'."""
+    if scan_stats is None:
+        return []
+
+    def items(key):
+        v = scan_stats.get(key)
+        if v is None or (isinstance(v, float) and v != v):
+            return None
+        v = str(v).strip()
+        if v in ("", "(nenhum)"):
+            return []
+        return [tuple(p.split(": ", 1)) if ": " in p else (p, "") for p in v.split("; ")]
+    op, nc, sk = items("sets_operational_failure"), items("sets_no_coverage"), items("sets_skip_list")
+    if op is None and nc is None:
+        return [("info", "⚠ desfecho por set indisponível (XLSX do scanner sem aba Stats/desfechos): "
+                         "não dá para afirmar que todos os sets foram avaliados.")]
+    out = []
+    if op:
+        out.append(("op", f"⚠ {len(op)} set(s) NÃO avaliados por falha operacional: "
+                    + ", ".join(f"{s} ({r})" if r else s for s, r in op)
+                    + " — tentar de novo; a ausência de deals nesses sets não significa nada."))
+    if nc:
+        out.append(("info", f"{len(nc)} set(s) sem cobertura: " + ", ".join(f"{s} ({r})" if r else s for s, r in nc) + "."))
+    if sk:
+        def one(s, r):
+            motivo, data, prov = (r.split(" | ") + ["?", "?", "?"])[:3]
+            return f"{s} (sem cobertura registrada em {data}; motivo {motivo}; provider {prov})"
+        out.append(("info", f"{len(sk)} set(s) pulados pela skip-list (decisão registrada, não avaliados neste run): "
+                    + ", ".join(one(s, r) for s, r in sk) + "."))
+    return out
+
+
+def _set_outcome_header(scan_stats: dict | None) -> str:
+    """Markdown do aviso de sets (cabeçalho da entrega .md/terminal)."""
+    return "\n".join(f"**{x}**" if k == "op" else f"_{x}_" for k, x in _set_outcome_parts(scan_stats))
 
 
 def _origin_lines(scan_stats: dict | None, n_priced: int) -> list[str]:
@@ -1648,7 +1705,7 @@ def build_delivery_markdown(
         for k in ("live_usd", "ct_price_usd"):
             if k in row and pd.notna(row.get(k)):
                 return float(row[k])
-        live_brl = row.get("live_brl")
+        live_brl = row.get("compra_brl") if "compra_brl" in row else row.get("live_brl")
         if fx_usd_brl and pd.notna(live_brl) and float(fx_usd_brl) > 0:
             return float(live_brl) / float(fx_usd_brl)
         return None
@@ -1772,6 +1829,9 @@ def build_delivery_markdown(
         title += f" · corte razão ≥ {float(min_ratio):.1f}× (sobre todas as linhas precificadas)"
         if min_ref_usd is not None:
             title += f" · piso ref ≥ US${float(min_ref_usd):g}"
+    _warn = _set_outcome_header(scan_stats)            # B1p: aviso de set não avaliado no cabeçalho, em todo retorno
+    if _warn:
+        title += "\n\n" + _warn
     if ratio_cut_applied and deals.empty:
         # 'sem dado' ≠ 'abaixo do corte': dizer os dois números, nunca culpar a
         # razão quando ela nem pôde ser calculada (sem câmbio/CT US$).

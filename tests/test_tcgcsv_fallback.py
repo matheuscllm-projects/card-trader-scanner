@@ -451,7 +451,7 @@ def test_f_validate_per_blueprint_overrides_tcgcsv_margin():
     # per-blueprint devolve o mesmo seller, NM, não-reverse, a R$63 (markup +5%)
     s.ct.list_listings_by_blueprint = MagicMock(return_value=[{
         "user": {"username": "seller1"},
-        "price_cents": 6300, "price_currency": "BRL",
+        "price_cents": 6300, "price_currency": "BRL", "graded": False,
         "properties_hash": {"condition": "Near Mint",
                             "pokemon_reverse": False, "pokemon_language": "en"},
     }])
