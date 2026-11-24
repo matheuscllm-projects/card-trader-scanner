@@ -328,3 +328,32 @@ def test_breaker_opens_after_two_very_slow_offers_not_six():
     assert not b.is_open                    # 1 amostra só não basta
     assert b.record(False, 90.0) and b.is_open
     assert b.fail_count == 2 and b.sample_count == 2
+
+
+# ───────── smoke real: retries que "dão certo" e miss do tcgcsv depois do disjuntor ─────────
+def test_breaker_counts_offers_that_needed_5xx_retries_as_degraded():
+    """Smoke real (teu): a fonte oscila (5xx) mas cada oferta acaba respondendo depois de retries
+    de 1-30 s; sem contar os retries o disjuntor nunca abria e o set estourou os 8 min."""
+    state = {"n": 0}
+
+    def price(i):
+        s.pricing.retry_5xx += 2 if i % 3 != 2 else 0          # 2 de cada 3 ofertas precisaram de retry
+        return 55.0
+    s, listings = _build(60, _all_rows(60), price)
+    s.pricing.retry_5xx = 0
+    s.scan([EXP])
+    assert len(s._calls) <= 12 and s.breaker.events and s.set_outcomes[0]["status"] == "complete"
+
+
+def test_offers_tcgcsv_answered_with_no_card_are_unpriced_not_a_failed_set():
+    """Smoke real (hif): set atendido direto pelo tcgcsv; 2 ofertas sem a carta no tcgcsv =
+    resposta válida (sem referência na fonte) -> completo com 2 sem preço, NÃO falha operacional."""
+    rows = [(k, "Unlimited Holofoil", 40.0 + k) for k in range(1, 59)]       # 58 de 60 têm preço
+    s, listings = _build(60, rows, lambda i: (_ for _ in ()).throw(requests.Timeout("502")))
+    s.breaker = sc.SourceBreaker()
+    s.breaker.is_open = True                                       # set começa com a fonte degradada
+    s.scan([EXP])
+    o = s.set_outcomes[0]
+    assert o["status"] == "complete_with_unpriced", o
+    assert [r["reason"] for r in s.unpriced_rows] == ["sem_referencia_na_fonte"] * 2
+    assert s._calls == []

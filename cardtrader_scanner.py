@@ -3770,6 +3770,12 @@ class Scanner:
         # com os dois motivos (substitui a linha provisória; nunca vira miss nem fica duplicada)
         first_map = self.__dict__.setdefault("_noref_first", {})
         infra = self.__dict__.setdefault("_infra_failed", {})
+        if rescue_status == "ok":
+            # o tcgcsv RESPONDEU para toda oferta pendente: o que sobrou sem preço é resposta válida
+            # ("sem referência na fonte"), não oferta sem resposta (B1e)
+            for l in pending:
+                if l.uid not in handled and l.uid not in infra and causes.get(l.uid, "not_reached") == "not_reached":
+                    causes[l.uid] = "miss"
         if rescue_status == "fetch_failed":
             for l in pending:
                 if l.uid not in handled:
@@ -4067,6 +4073,8 @@ class Scanner:
             failed = False
             infra_fail = False
             _t0 = time.monotonic()
+            _r0 = getattr(self.pricing, "retry_5xx", 0)
+            _r0 = _r0 if isinstance(_r0, int) else 0
             try:
                 tcg_market = self.pricing.market_price_usd(
                     l.card_name, l.set_code, l.collector_number,
@@ -4094,7 +4102,9 @@ class Scanner:
                 set_pricing_failures += 1
                 self.stats["pricing_failures"] += 1
                 failed = True
-            breaker_opened = (brk.record(not infra_fail, time.monotonic() - _t0)
+            _r1 = getattr(self.pricing, "retry_5xx", 0)
+            degraded = infra_fail or (isinstance(_r1, int) and _r1 > _r0)   # respondeu só depois de 5xx/429
+            breaker_opened = (brk.record(not degraded, time.monotonic() - _t0)
                               if brk is not None else False)
             # Lote 3b: a falha em massa é avaliada DEPOIS de contabilizar o listing
             # atual (hit/miss/falha) — antes ela abortava antes de registrar um
