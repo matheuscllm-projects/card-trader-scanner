@@ -548,15 +548,17 @@ def apply_card_hyperlinks(ws, df):
                 cell.hyperlink = v
                 cell.font = HYPERLINK_FONT
     # Preço CT → Link CT (clicar no preço abre a página do card no CT pra conferir)
-    if "Preço CT (R$)" in cols and "Link CT" in cols:
-        price_idx = cols.index("Preço CT (R$)") + 1
-        link_idx = cols.index("Link CT") + 1
-        for ri in range(2, len(df) + 2):
-            url = ws.cell(row=ri, column=link_idx).value
-            if isinstance(url, str) and url.startswith("http"):
-                c = ws.cell(row=ri, column=price_idx)
-                c.hyperlink = url
-                c.font = HYPERLINK_FONT
+    # (B1p: as colunas de preço foram renomeadas no B1m/B1o; o alvo é o mesmo Link CT)
+    for price_col in ("Preço CT validado (R$)", "Preço usado na conta (R$)"):
+        if price_col in cols and "Link CT" in cols:
+            price_idx = cols.index(price_col) + 1
+            link_idx = cols.index("Link CT") + 1
+            for ri in range(2, len(df) + 2):
+                url = ws.cell(row=ri, column=link_idx).value
+                if isinstance(url, str) and url.startswith("http"):
+                    c = ws.cell(row=ri, column=price_idx)
+                    c.hyperlink = url
+                    c.font = HYPERLINK_FONT
     # TCG (R$) → Link TCG (clicar no preço abre a página TCGplayer pra conferir)
     if "TCG (R$)" in cols and "Link TCG" in cols:
         tprice_idx = cols.index("TCG (R$)") + 1
@@ -1168,6 +1170,32 @@ def _read_scan_stats(input_path) -> dict:
         if len(r) >= 2 and pd.notna(r.iloc[0]):
             out[str(r.iloc[0]).strip()] = r.iloc[1]
     return out
+
+
+def _set_outcome_header(scan_stats: dict | None) -> str:
+    """B1p: aviso visível no CABEÇALHO da entrega com os sets que NÃO foram avaliados (falha operacional) e os sem
+    cobertura. None = chamador sem Stats (sem aviso); dict sem as chaves (XLSX antigo) = 'indisponível'."""
+    if scan_stats is None:
+        return ""
+
+    def items(key):
+        v = scan_stats.get(key)
+        if v is None or (isinstance(v, float) and v != v):
+            return None
+        v = str(v).strip()
+        if v in ("", "(nenhum)"):
+            return []
+        return [tuple(p.split(": ", 1)) if ": " in p else (p, "") for p in v.split("; ")]
+    op, nc = items("sets_operational_failure"), items("sets_no_coverage")
+    if op is None and nc is None:
+        return "_⚠ desfecho por set indisponível (XLSX do scanner sem aba Stats/desfechos): não dá para afirmar que todos os sets foram avaliados._"
+    out = []
+    if op:
+        out.append(f"**⚠ {len(op)} set(s) NÃO avaliados por falha operacional: "
+                   + ", ".join(f"{s} ({r})" if r else s for s, r in op) + " — tentar de novo; a ausência de deals nesses sets não significa nada.**")
+    if nc:
+        out.append(f"_{len(nc)} set(s) sem cobertura: " + ", ".join(f"{s} ({r})" if r else s for s, r in nc) + "._")
+    return "\n".join(out)
 
 
 def _origin_lines(scan_stats: dict | None, n_priced: int) -> list[str]:
@@ -1787,6 +1815,9 @@ def build_delivery_markdown(
         title += f" · corte razão ≥ {float(min_ratio):.1f}× (sobre todas as linhas precificadas)"
         if min_ref_usd is not None:
             title += f" · piso ref ≥ US${float(min_ref_usd):g}"
+    _warn = _set_outcome_header(scan_stats)            # B1p: aviso de set não avaliado no cabeçalho, em todo retorno
+    if _warn:
+        title += "\n\n" + _warn
     if ratio_cut_applied and deals.empty:
         # 'sem dado' ≠ 'abaixo do corte': dizer os dois números, nunca culpar a
         # razão quando ela nem pôde ser calculada (sem câmbio/CT US$).

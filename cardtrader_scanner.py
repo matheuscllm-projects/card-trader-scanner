@@ -3668,7 +3668,7 @@ class Scanner:
         return best_by_uid, langs_seen
 
     PAYLOAD_CANARY_FRACTION = 0.10      # fração de listings do set sem uma chave obrigatória que dispara o canário
-    PAYLOAD_CANARY_MIN_SAMPLE = 20
+    PAYLOAD_CANARY_MIN_BAD = 2          # mínimo absoluto de listings ruins (junto com a fração), em qualquer tamanho de set
 
     def _check_payload_canary(self, exp_code: str, total: int, kept: int = 0) -> bool:
         """B1n/B1o: se o set veio SEM uma chave obrigatória em fração relevante dos listings (set com >= 20: a fração
@@ -3685,8 +3685,8 @@ class Scanner:
         top = sorted(miss.items(), key=lambda kv: -kv[1])
         for k, n in top:
             ratio = n / total
-            if (total >= self.PAYLOAD_CANARY_MIN_SAMPLE and ratio >= self.PAYLOAD_CANARY_FRACTION) or \
-                    (total < self.PAYLOAD_CANARY_MIN_SAMPLE and n == total):
+            # B1p: regra contínua (sem salto entre 19 e 20): >= 2 ruins E fração >= 10%, ou TODOS ruins
+            if (n >= self.PAYLOAD_CANARY_MIN_BAD and ratio >= self.PAYLOAD_CANARY_FRACTION) or n == total:
                 key, cnt = k, n
                 break
         if key is None and dropped >= total:
@@ -5310,12 +5310,16 @@ def _live_ok(o) -> bool:
 #   20   validação per-blueprint PARCIAL: houve API_ERROR e/ou moeda não suportada entre os candidatos (XLSX completo)
 #   21   NENHUM preço live válido (PRECO_INVALIDO / VALIDATED_* com live inválido) — XLSX completo, linhas REVISAR
 #   22   validação falhou por completo: erro de API em TODOS os candidatos — XLSX completo, nenhuma linha validada
+#   23   scan concluído, mas com set(s) em FALHA OPERACIONAL (canário de formato, 5xx, rede, disjuntor, timeout): XLSX
+#        gravado; esses sets NÃO foram avaliados (tentar de novo). Vale também com --validate-top 0
 #   130  interrompido (Ctrl-C): XLSX parcial
+#   Precedência com mais de uma condição: 22 > 21 > 23 > 20 (130 vence tudo); TODAS as mensagens são impressas
 #   (97/98/99 pertencem aos launchers .ps1: pré-requisitos ausentes; o .ps1 só roda o postprocess com 20/21/22 quando o
 #    XLSX bruto foi escrito DURANTE este run — ver scripts/scanner_exit_decision.ps1)
 EXIT_VALIDATION_PARTIAL = 20
 EXIT_NO_VALID_LIVE_PRICE = 21
 EXIT_VALIDATION_API_FAILED = 22
+EXIT_SET_OPERATIONAL_FAILURE = 23
 
 
 def validation_exit_code(opps) -> int:
@@ -5347,6 +5351,22 @@ def validation_exit_message(code: int) -> str:
         return ("⚠️ Validação per-blueprint PARCIAL: houve erro de API e/ou moeda não suportada em alguns candidatos "
                 "(ficam REVISAR, sem preço live). O XLSX está completo. Saída com código 20.")
     return ""
+
+
+def run_exit_decision(opps, set_outcomes, validate_on: bool = True):
+    """B1p: (código, mensagens) do run. Precedência 22 > 21 > 23 > 20; toda condição presente gera mensagem."""
+    vcode = validation_exit_code(opps) if validate_on else 0
+    bad = [o for o in (set_outcomes or []) if o.get("status") == "operational_failure"]
+    msgs = [validation_exit_message(vcode)] if vcode else []
+    if bad:
+        msgs.append(f"⛔ {len(bad)} set(s) NÃO avaliados por falha operacional: "
+                    + ", ".join(f"{o['set']} ({o.get('reason', '')})" for o in bad)
+                    + ". O XLSX foi gravado; tente de novo esses sets. Saída com código 23.")
+    if vcode in (EXIT_VALIDATION_API_FAILED, EXIT_NO_VALID_LIVE_PRICE):
+        return vcode, msgs
+    if bad:
+        return EXIT_SET_OPERATIONAL_FAILURE, msgs
+    return vcode, msgs
 
 
 def print_top_opportunities(opps_by_net, validated: bool = True) -> None:
@@ -6371,10 +6391,11 @@ def main():
         except Exception:  # noqa: BLE001 — o resumo é só exibição: nunca derruba o scan (B1m), mas NÃO fica mudo (B1n)
             log.exception("bloco TOP 5 não pôde ser impresso; o XLSX está completo")
 
-    if args.validate_top != 0 and not interrupted:
-        _vcode = validation_exit_code(opps)
+    if not interrupted:
+        _vcode, _vmsgs = run_exit_decision(opps, getattr(scanner, "set_outcomes", []), args.validate_top != 0)
+        for _m in _vmsgs:
+            log.error(_m)
         if _vcode:
-            log.error(validation_exit_message(_vcode))
             sys.exit(_vcode)
 
     if interrupted:

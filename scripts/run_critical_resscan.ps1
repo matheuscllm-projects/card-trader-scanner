@@ -21,7 +21,7 @@ $env:PYTHONIOENCODING  = 'utf-8'
 $env:PYTHONUNBUFFERED  = '1'
 
 $base = 'C:\Users\mathe\Meu Drive\OBSIDIAN\01 - Projetos\TCG & Exporta' + [char]0xE7 + [char]0xE3 + 'o\CardTrader Scanner'
-$repo = $base
+$repo = if ($env:CT_SCANNER_REPO) { $env:CT_SCANNER_REPO } else { $base }   # override so p/ teste
 if (-not (Test-Path -LiteralPath $repo)) {
     Write-Error "Repo path not found: $repo"
     exit 99
@@ -70,6 +70,8 @@ $scannerArgs = @(
     '--output', $rawOut
 )
 
+. (Join-Path $PSScriptRoot 'scanner_exit_decision.ps1')
+$runStart = Get-Date
 & $py @scannerArgs 2> $stderrFile | Out-Null
 $scannerExit = $LASTEXITCODE
 
@@ -81,9 +83,14 @@ if ((Test-Path -LiteralPath $stderrFile) -and (Get-Item -LiteralPath $stderrFile
 
 "--- SCANNER exit=$scannerExit at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ---" | Add-Content -LiteralPath $logFile -Encoding utf8
 
-if ($scannerExit -ne 0) {
+# B1o/B1p: decisao testavel (scripts/scanner_exit_decision.ps1): com exit 20/21/22/23 so segue se o XLSX bruto foi escrito
+# DURANTE este run; exit 2 (args/run-guard) e qualquer outro abortam.
+if ((Get-PostprocessDecision -ExitCode $scannerExit -RawOut $rawOut -RunStart $runStart) -ne 'run') {
     "SCANNER FAILED exit=$scannerExit" | Add-Content -LiteralPath $logFile -Encoding utf8
     exit $scannerExit
+}
+if ($scannerExit -ne 0) {
+    "SCANNER exit=$scannerExit com XLSX gravado neste run: seguindo para o postprocess (aviso de sets nao avaliados vai no cabecalho da entrega)" | Add-Content -LiteralPath $logFile -Encoding utf8
 }
 
 # Step 2: postprocess v2
@@ -126,3 +133,6 @@ if ($postExit -ne 0) {
 }
 
 "=== DONE $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') scanner=$scannerExit post=$postExit ===" | Add-Content -LiteralPath $logFile -Encoding utf8
+
+# B1p: o launcher termina com o codigo do scanner (23 = set(s) em falha operacional etc.), nunca 0 silencioso
+if ($scannerExit -ne 0) { exit $scannerExit }
