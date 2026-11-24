@@ -1,5 +1,5 @@
 ---
-description: Roda o scan canônico do CardTrader por GRUPOS de sets (6 grupos por recência, ≤~2h30 cada — formato padrão da frota, igual ao scan-myp) e entrega via cardtrader_postprocess.py verbatim. SEMPRE pergunta ao operador quais grupos rodar antes de começar. Argumento = números de grupo (ex. "1 3") OU códigos de set CT; "total" = catálogo inteiro via workflow semanal.
+description: Roda o scan canônico do CardTrader por GRUPOS de sets (6 grupos por recência, poucos minutos cada (medido) — formato padrão da frota, igual ao scan-myp) e entrega via cardtrader_postprocess.py verbatim. SEMPRE pergunta ao operador quais grupos rodar antes de começar. Argumento = números de grupo (ex. "1 3") OU códigos de set CT; "total" = catálogo inteiro via workflow semanal.
 allowed-tools: Bash, Read, Grep, Glob, AskUserQuestion
 ---
 
@@ -11,7 +11,7 @@ Você foi acionado pelo comando **`/scan`** do operador. Sua missão é **uma s�
 rodar o scanner do CardTrader **por grupos canônicos** — nunca improvisando
 flags — e entregar cada grupo no formato obrigatório do postprocess. **Nenhum
 scan do CardTrader roda fora deste runbook.** Runs longos morriam sem entregar;
-cada grupo cabe em ≤~2h30 e entrega **sozinho** (se o seguinte morrer, o
+cada grupo é curto (tempos medidos abaixo) e entrega **sozinho** (se o seguinte morrer, o
 anterior já foi entregue). Se algo aqui divergir do `CLAUDE.md`, ele vence.
 
 **Argumento recebido (grupos, códigos ou "total"):** `$ARGUMENTS`
@@ -35,20 +35,22 @@ anterior já foi entregue). Se algo aqui divergir do `CLAUDE.md`, ele vence.
 
 ## 2. Os 6 grupos (códigos CT VERBATIM — nunca invente/deduza outros)
 
-Universo = os **128 sets com referência de preço real e sem armadilha**,
+Universo = os **132 sets com referência de preço real e sem armadilha**,
 derivado de `SET_ALIAS_TO_PTCG` + `VINTAGE_SET_CODES` do scanner (excluídos:
 `wcd*` — decks de mundial precificados contra o set original = preço-armadilha;
 `mc*` McDonald's; variantes `p`-duplicadas). A partição é **travada por teste**
 (`tests/test_scan_skill_profiles.py`) — nunca edite um código de cabeça.
 
-| Grupo | Era | Sets | Est. local |
+| Grupo | Era | Sets | Medido 2026-11-24 |
 |---|---|---|---|
-| **G1** | Mega Evolution (**inclui Chaos Rising**) + era SV | 21 | ~1h35–2h |
-| **G2** | era Sword & Shield + Pokémon GO + Detective Pikachu + SM final | 21 | ~1h35–2h |
-| **G3** | Sun & Moon restante + XY final | 21 | ~1h35–2h |
-| **G4** | XY inicial + era Black & White + HGSS | 21 | ~1h35–2h |
-| **G5** | Call of Legends + DP + Platinum + EX tardio (tem sets lentos) | 22 | ~1h50–2h15 |
-| **G6** | EX inicial + e-Card + WotC (Base…Neo, Gym, promos) | 22 | ~1h50–2h15 |
+| **G1** | Mega Evolution (**inclui Chaos Rising**) + era SV | 21 | 3,5 min |
+| **G2** | era Sword & Shield + Pokémon GO + Detective Pikachu + SM final | 21 | 2,4 min |
+| **G3** | Sun & Moon restante + XY final | 21 | 1,2 min |
+| **G4** | XY inicial + era Black & White + HGSS | 21 | 1,0 min |
+| **G5** | Call of Legends + DP + Platinum + EX tardio (tem sets lentos) | 26 | 0,7 min (26 sets, com md/la/dp/ar/dpbsp) |
+| **G6** | EX inicial + e-Card + WotC (Base…Neo, Gym, promos) | 22 | 0,9 min |
+
+_Ressalva: medido com tcgcsv como fonte principal, validando todas as candidatas (sem top-N); com `--provider pokemontcg` não foi medido. `--vintage` (34 sets): 1,2 min. DP Black Star Promos = `dpbsp` (id 1517 na API de expansões da CardTrader; o antigo `pdp` não existia)._
 
 **G1 — Mega Evolution + era SV:**
 ```bash
@@ -85,7 +87,7 @@ python cardtrader_scanner.py \
 **G5 — COL + DP + Platinum + EX tardio:**
 ```bash
 python cardtrader_scanner.py \
-  --sets clo sft ge sw mt pdp sv rr pl nbsp pk df cg hp lm ds uf em dx trr rg hl \
+  --sets clo ar sv rr pl sft la md ge sw mt dp dpbsp nbsp pk df cg hp lm ds uf em dx trr rg hl \
   --threshold 0.30 --max-consecutive-misses 40 \
   --output outputs/scan_g5_<AAAAMMDD_HHMM>.xlsx
 ```
@@ -115,11 +117,9 @@ python cardtrader_scanner.py \
   recusa). Grupos escolhidos rodam **em sequência**, cada um em background,
   monitorado. Sets vintage lentos já têm timeout interno maior (df 20min,
   ds/n1/n4 18min) — não mexa em `--per-set-timeout`.
-- ⏱️ **Estimativa de tempo calibrada com 30 validações** (o default antigo):
-  como agora todas as oportunidades são validadas, a duração de cada grupo
-  precisa ser **remedida** num scan real (ainda não feito) — os tempos da tabela
-  são estimativa. Anote a duração real de cada grupo no resumo.
-- Grupo que estourar ~2h30 de relógio: anote a duração real no resumo e
+- ⏱️ **Tempos medidos em 2026-11-24** (tcgcsv, validando todas, sem top-N): ver a tabela do §2.
+  Anote a duração real de cada grupo no resumo.
+- Grupo que estourar bem acima do medido (>~15 min): anote a duração real no resumo e
   proponha re-dividir. Grupo que falhar não cancela os demais — registre com a
   saída real e siga.
 - **Rota via GitHub (opcional)**: dispatch do workflow `daily-scan.yml` com o

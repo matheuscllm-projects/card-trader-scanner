@@ -50,7 +50,7 @@ FIXTURE = TESTS_DIR / "fixtures" / "tcgcsv_groups_pokemon.json"
 
 # Códigos do menu do skill user-level card-trader-scan que não têm alias
 # pokemontcg.io (por isso fora do _universe()) mas são rastreados pelo operador.
-SKILL_MENU_EXTRA = {"ar", "c25", "dp", "la", "md"}
+SKILL_MENU_EXTRA = {"c25"}
 
 
 def _groups():
