@@ -1,8 +1,12 @@
-"""P1 ponta a ponta: postprocess sobre um XLSX REAL de scan (4062 linhas, 34 sets vintage).
+"""P1 ponta a ponta: postprocess sobre um XLSX de scan (formato real: 35 colunas, abas
+Oportunidades + Stats).
 
-O XLSX tem precos de mercado e por isso NAO e versionado (DELIVERY_CHAT: nada de resultados
-no GitHub; ver .gitignore). O teste le de tests/fixtures/ ou do diretorio de comparacao do
-dono e e PULADO se nenhum existir.
+FIXTURE VERSIONADA: tests/fixtures/scan_sintetico.xlsx e SINTETICA (valores inventados; mesmas
+colunas, abas e tipos do XLSX real; gerada por tests/fixtures/make_scan_sintetico.py). Motivo:
+o XLSX real tem precos de mercado e DELIVERY_CHAT.md proibe publicar resultados de coleta no
+GitHub (ver .gitignore). Estes testes rodam SEMPRE, sem skip. Como COMPLEMENTO LOCAL, se o XLSX
+real de 4062 linhas existir no PC do dono, os mesmos testes rodam tambem sobre ele (parametro
+extra; em CI o parametro simplesmente nao existe).
 """
 import os
 import re
@@ -17,10 +21,9 @@ import pytest
 import cardtrader_postprocess as pp
 import pricecharting_ref as pcr
 
-_CANDIDATES = [Path(__file__).parent / "fixtures" / "scan_full34.xlsx",
-               Path(r"C:\Users\mathe\ct-vintage-compare\full34\scan_full34.xlsx")]
-REAL = next((p for p in _CANDIDATES if p.exists()), None)
-pytestmark = pytest.mark.skipif(REAL is None, reason="XLSX real do scan nao disponivel")
+SINTETICO = Path(__file__).parent / "fixtures" / "scan_sintetico.xlsx"
+REAL_LOCAL = Path(r"C:\Users\mathe\ct-vintage-compare\full34\scan_full34.xlsx")
+_FONTES = {"sintetico": SINTETICO, **({"real_local": REAL_LOCAL} if REAL_LOCAL.exists() else {})}
 
 ROW = re.compile(r"^\| \d+ \|")
 
@@ -29,9 +32,9 @@ def _rows(md):
     return [l for l in md.splitlines() if ROW.match(l)]
 
 
-@pytest.fixture(scope="module")
-def raw():
-    return pd.read_excel(REAL)
+@pytest.fixture(scope="module", params=list(_FONTES))
+def raw(request):
+    return pd.read_excel(_FONTES[request.param])
 
 
 def _run(raw, tmp_path, extra=None):
@@ -66,7 +69,8 @@ def test_real_xlsx_sem_pc_nenhuma_compra_e_contabilidade_fecha(raw, tmp_path):
     assert "não certificada pelo scanner" in main   # XLSX antigo: sem coluna 'Ref Compatível'
     # 4) soma dos baldes + extras == linhas de entrada; auditoria == linha informada no chat
     c = pp.bucket_counts(pp.enrich_df(raw, costs=cfg.costs), cfg, extra)
-    assert c["COMPRA"] + c["REVISAR"] + c["NAO"] + c["AUDITORIA"] + sum(c["EXTRAS"].values()) == len(raw) + 2
+    assert (c["COMPRA"] + c["REVISAR"] + c["NAO"] + c["AUDITORIA"] + c["SEM_REF"]
+            + sum(c["EXTRAS"].values())) == len(raw) + 2
     assert c["ENTRADA"] == len(raw) + 2
     assert c["AUDITORIA"] > 0
     assert f"{c['AUDITORIA']} oportunidade(s) com margem negativa" in md
@@ -117,3 +121,16 @@ def test_real_xlsx_ref_certificada_mas_sem_consulta_pc_e_revisar_por_liquidez(ra
     rows = _rows(md)
     assert any("liquidez não verificada: NAO_CONSULTADO" in l for l in rows)
     assert not any("| COMPRA" in l for l in rows)
+
+
+def test_fixture_sintetica_cobre_os_casos_do_relatorio(tmp_path):
+    """Casos que a fixture versionada precisa carregar (margem alta validada, negativa,
+    sem referencia, numero com letra, sem validacao) e o destino de cada um."""
+    raw = pd.read_excel(SINTETICO)
+    assert list(raw.columns)[:3] == ["Card Name", "Set", "Nº"] and len(raw.columns) == 35
+    cfg, md, wb = _run(raw, tmp_path)
+    c = pp.bucket_counts(pp.enrich_df(raw, costs=cfg.costs), cfg)
+    assert c["AUDITORIA"] >= 2 and c["SEM_REF"] >= 2
+    assert "### Sem referência" in md and "50a" in md and "Alpha suffix '50a'" in md
+    assert (raw["Validation Status"] == "VALIDATED_MARKUP").sum() >= 6
+    assert (raw["Validation Status"] == "NOT_VALIDATED").sum() >= 20
