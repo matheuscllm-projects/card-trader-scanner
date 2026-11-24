@@ -73,7 +73,9 @@ def test_filter_keeps_rows_that_could_not_be_validated(caplog):
     assert "STALE/API_ERROR/PRICE_CHANGED" not in text  # texto antigo enganoso
 
 
-def test_filter_drops_only_validated_rows_below_min_net_and_reports_them(caplog):
+def test_filter_never_removes_rows_only_marks_validated_below_min_net(caplog):
+    """B1c-2: o scanner NAO descarta linha por margem depois de validar (o corte unico e do
+    postprocess). --min-net-margin so MARCA: devolve a lista de marcadas e loga."""
     rows = [
         _opp(1, status="VALIDATED_REAL", real_net=0.10, name="Barata"),
         _opp(2, status="VALIDATED_MARKUP", real_net=0.35),
@@ -81,8 +83,8 @@ def test_filter_drops_only_validated_rows_below_min_net_and_reports_them(caplog)
     ]
     with caplog.at_level(logging.INFO, logger=sc.log.name):
         kept, dropped = sc.apply_validation_filters(rows, min_net_margin=0.20)
-    assert [o.listing.blueprint_id for o in kept] == [2, 3]
-    assert [o.listing.blueprint_id for o in dropped] == [1]
+    assert [o.listing.blueprint_id for o in kept] == [1, 2, 3]   # nenhuma sai
+    assert [o.listing.blueprint_id for o in dropped] == [1]      # so marcada
     text = " ".join(r.getMessage() for r in caplog.records)
     assert "Barata" in text and "min-net-margin" in text, text  # nada some em silêncio
 

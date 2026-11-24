@@ -209,8 +209,8 @@ estão divididos em **6 grupos por recência** (G1 = Mega Evolution até Chaos
 Rising + era SV … G6 = EX inicial + e-Card + WotC), cada um ≤~2h30 de scan —
 runs mais longos morriam sem entregar. O skill **sempre pergunta quais grupos
 rodar**, roda um por vez (nunca em paralelo) com os valores canônicos
-(threshold 0.30, min-net-margin 0.20, max-consecutive-misses 40; **sem**
-`--validate-top`: valida todas) e entrega **cada grupo**
+(threshold 0.30, max-consecutive-misses 40; **sem** `--validate-top`
+(valida todas) e **sem** `--min-net-margin` no scanner: o corte é único, no postprocess) e entrega **cada grupo**
 pela tabela do postprocess assim que termina. `/scan pre ssp` = sets custom;
 `/scan total` = catálogo inteiro via workflow semanal. A partição é travada por
 teste (`tests/test_scan_skill_profiles.py`) contra o mapa do scanner. **Nenhum
@@ -232,7 +232,6 @@ use exatamente os valores canônicos:
   --sets sfa scr par paf tef twm ssp dri blk jtg \   # quais coleções (códigos CardTrader)
   --threshold 0.30 \                                  # margem mínima 30% (FRAÇÃO!)
                                                       # (sem --validate-top = confere TODAS)
-  --min-net-margin 0.20 \                             # descarta lucro líquido < 20%
   --output outputs/scan_da_vez.xlsx                   # onde salvar a planilha
 
 # 2) Gerar o relatório organizado (decisão COMPRA/REVISAR/NÃO):
@@ -249,8 +248,10 @@ use exatamente os valores canônicos:
 - `--validate-top`: omitido = valida **todas** (Lote 3). `N` limita, `0` desliga
   (sem validação ~76% dos achados são falsos). Os comandos canônicos do skill
   `/scan` **não passam** a flag (validam todas).
-- `--min-net-margin`: default **0.0 no scanner** e **0.30 no postprocess** (corte do
-  dono, margem sobre a venda) — o comando canônico passa `0.20` explícito no scanner.
+- `--min-net-margin`: no **scanner** (default 0.0) só MARCA (log + contador `opps_marcadas_min_net`),
+  NUNCA remove linha — toda oferta validada vai ao XLSX e quem classifica é o postprocess; no
+  **postprocess** (padrão 0.30) é o corte único do dono, margem sobre a venda. O comando canônico
+  não passa a flag no scanner.
 
 Opções úteis:
 

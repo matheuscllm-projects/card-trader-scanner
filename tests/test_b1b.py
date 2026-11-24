@@ -74,10 +74,34 @@ def test_both_sources_incompatible_replaces_row_with_two_reasons_and_sum_closes(
     assert len([c for c in cp if c.get("_type") == "noref"]) == 3
 
 
-def test_tcgcsv_fetch_failure_still_records_noref_with_the_first_reason(tmp_path, monkeypatch):
+def test_tcgcsv_fetch_failure_is_operational_not_definitive_noref(tmp_path, monkeypatch):
+    """B1c-1 cenario A: pokemontcg acha a carta sem variante compativel e o tcgcsv FALHA (rede/5xx):
+    NAO e 'Sem Ref Compativel' definitivo; vai p/ 'Sem preço' como falha operacional (com a 1ª causa)
+    e o set sai operational_failure ('tentar de novo'), nunca complete."""
     scanner, listings = _fallback_scanner(tmp_path, [(1, "Unlimited Holofoil", 1.0)])
     scanner.tcgcsv.prefill_set = MagicMock(return_value=False)
     scanner.tcgcsv.last_prefill_status = "fetch_failed"
     opps, done, _ = _run(scanner, listings, tmp_path, monkeypatch)
-    assert opps == [] and len(scanner.noref_rows) == 1
-    assert "pokemontcg" in scanner.noref_rows[0]["motivo"]
+    assert opps == [] and scanner.noref_rows == []
+    assert [r["reason"] for r in scanner.unpriced_rows] == ["falha_operacional"]
+    assert "pokemontcg" in scanner.unpriced_rows[0]["detail"]
+    assert done and done[0]["status"] == "operational_failure"
+
+
+def test_tcgcsv_pricing_exception_is_operational_not_noref(tmp_path, monkeypatch):
+    """B1c-1 cenario B: market_price_usd lanca excecao -> falha operacional, nao 'carta nao encontrada'."""
+    scanner, listings = _fallback_scanner(tmp_path, [(1, "Unlimited Holofoil", 1.0)])
+    scanner.tcgcsv.market_price_usd = MagicMock(side_effect=RuntimeError("boom"))
+    opps, done, _ = _run(scanner, listings, tmp_path, monkeypatch)
+    assert opps == [] and scanner.noref_rows == []
+    assert [r["reason"] for r in scanner.unpriced_rows] == ["falha_operacional"]
+    assert done and done[0]["status"] == "operational_failure"
+
+
+def test_scan_never_loses_validated_rows_below_min_net(tmp_path):
+    """B1c-2: 'após filtros' = soma de todos os destinos. Validada com líquida real < --min-net-margin
+    continua na lista final (o postprocess classifica), com o contador de marcadas."""
+    from test_validate_all import _opp
+    rows = [_opp(1, status="VALIDATED_REAL", real_net=0.05), _opp(2, status="VALIDATED_REAL", real_net=0.50)]
+    kept, marked = sc.apply_validation_filters(rows, 0.20)
+    assert len(kept) == 2 and len(marked) == 1

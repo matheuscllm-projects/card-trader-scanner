@@ -3529,7 +3529,8 @@ class Scanner:
             self._set_note = note
 
     def _record_unpriced(self, exp_code: str, listings: list["Listing"],
-                         causes: dict, detail: Optional[str]) -> None:
+                         causes: dict, detail: Optional[str],
+                         per_uid_detail: Optional[dict] = None) -> None:
         """Guarda cada listing sem referência (nada some em silêncio)."""
         if not hasattr(self, "unpriced_rows"):
             self.unpriced_rows = []
@@ -3543,7 +3544,8 @@ class Scanner:
                 "set": exp_code, "set_name": l.set_name, "card": l.card_name,
                 "number": l.collector_number, "ct_price_brl": round(l.price_brl, 2),
                 "seller": l.seller_username, "link": l.cardtrader_url,
-                "reason": reason, "detail": detail or "",
+                "reason": reason,
+                "detail": (per_uid_detail or {}).get(l.uid) or detail or "",
             }
             self.unpriced_rows.append(row)
             cp = getattr(self, "_checkpoint", None)
@@ -3604,7 +3606,9 @@ class Scanner:
                     foil=l.foil, rarity=l.rarity, first_edition=l.first_edition,
                 )
             except Exception as e:  # noqa: BLE001
+                # B1c: falha de infraestrutura NUNCA vira "sem ref compatível" definitivo
                 log.debug(f"  tcgcsv pricing falhou {l.card_name}: {e!r}")
+                self.__dict__.setdefault("_infra_failed", {})[l.uid] = f"tcgcsv: erro {type(e).__name__}"
                 continue
             if not price or price <= 0:
                 if self._ref_is_noref(self.tcgcsv):
@@ -3657,9 +3661,23 @@ class Scanner:
         # B1b: ref incompatível na 1ª fonte que o tcgcsv não resolveu → "Sem Ref Compatível"
         # com os dois motivos (substitui a linha provisória; nunca vira miss nem fica duplicada)
         first_map = self.__dict__.setdefault("_noref_first", {})
+        infra = self.__dict__.setdefault("_infra_failed", {})
+        if rescue_status == "fetch_failed":
+            for l in pending:
+                if l.uid not in handled:
+                    infra.setdefault(l.uid, "tcgcsv: indisponível (falha de rede/5xx)")
+        # B1c: oferta cujo fallback falhou por INFRAESTRUTURA fica pendente (aba "Sem preço",
+        # falha operacional, com a 1ª causa registrada), não vira "Sem Ref Compatível" definitivo.
+        infra_detail: dict = {}
+        for l in pending:
+            if l.uid in handled or l.uid not in infra:
+                continue
+            first = first_map.pop(l.uid, None)
+            infra_detail[l.uid] = ((f"{first.get('source') or 'pokemontcg'}: {first['motivo']} | "
+                                    if first else "") + infra[l.uid])
+            causes[l.uid] = "failure"
         if first_map:
-            why = {"fetch_failed": "indisponível (falha de rede/5xx)",
-                   "no_group": "sem dados do set"}.get(rescue_status or "", "carta não encontrada")
+            why = {"no_group": "sem dados do set"}.get(rescue_status or "", "carta não encontrada")
             for l in pending:
                 if l.uid in first_map and l.uid not in handled:
                     self._finalize_noref_pair(l, why)
@@ -3691,7 +3709,7 @@ class Scanner:
         self._set_outcome(status, reason)
         self._set_unpriced = len(left)
         if left:
-            self._record_unpriced(exp_code, left, causes, reason)
+            self._record_unpriced(exp_code, left, causes, reason, infra_detail)
             log.warning(
                 f"  ⚠️  {exp_code}: {len(left)} de {total} listings SEM preço "
                 f"({status}{': ' + reason if reason else ''}) — listados na aba 'Sem preço'"
@@ -4226,6 +4244,7 @@ class Scanner:
             self._set_all, self._set_accounted = [], set()
             self._noref_uids = set()
             self._noref_first = {}
+            self._infra_failed = {}
             try:
                 # v2.6: itera o generator e escreve cada Opportunity no checkpoint
                 # ASSIM QUE for yielded. Antes era `opps.extend(scan_expansion(exp))`
@@ -4617,33 +4636,25 @@ def apply_validation_record(o: "Opportunity", rec: dict,
 
 
 def apply_validation_filters(opps: list[Opportunity], min_net_margin: float):
-    """Lote 3 (D): aplica --min-net-margin SÓ a linhas VALIDADAS. Linha que não
-    pôde ser validada (STALE, API_ERROR, PRICE_CHANGED, NOT_VALIDATED por limite
-    de --validate-top) continua na saída com o status real — nada some por
-    causa de falha operacional. O que o operador cortou explicitamente com
-    --min-net-margin é devolvido em `dropped` e logado (não é descarte mudo).
-    Retorna (mantidas, descartadas_por_min_net)."""
+    """B1c: o scanner NÃO descarta linha nenhuma por margem depois de validar — toda oferta
+    validada vai ao XLSX com o preço real e o status; quem classifica é o postprocess (corte único).
+    `--min-net-margin` só MARCA: devolve (todas, marcadas) — marcadas = validadas com líquida real
+    abaixo do valor — e loga. Retorna (mantidas = todas, marcadas)."""
     validated = ("VALIDATED_REAL", "VALIDATED_MARKUP")
-    kept: list[Opportunity] = []
-    dropped: list[Opportunity] = []
-    for o in opps:
-        if (min_net_margin > 0 and o.validation_status in validated
-                and (o.real_net_margin_pct or 0) < min_net_margin):
-            dropped.append(o)
-        else:
-            kept.append(o)
+    marked = [o for o in opps if min_net_margin > 0 and o.validation_status in validated
+              and (o.real_net_margin_pct or 0) < min_net_margin]
     by_status: dict[str, int] = {}
-    for o in kept:
+    for o in opps:
         by_status[o.validation_status] = by_status.get(o.validation_status, 0) + 1
-    log.info(f"Validação: {len(kept)} oportunidades mantidas por status: {by_status}")
-    if dropped:
+    log.info(f"Validação: {len(opps)} oportunidades mantidas por status: {by_status}")
+    if marked:
         names = "; ".join(
             f"{o.listing.card_name} ({o.listing.set_code} {o.listing.collector_number}) "
-            f"net real {(o.real_net_margin_pct or 0):.0%}" for o in dropped)
+            f"net real {(o.real_net_margin_pct or 0):.0%}" for o in marked)
         log.info(
-            f"Filtro --min-net-margin {min_net_margin:.0%}: {len(dropped)} oportunidade(s) "
-            f"validada(s) abaixo do corte, removidas por pedido do operador: {names}")
-    return kept, dropped
+            f"--min-net-margin {min_net_margin:.0%}: {len(marked)} oportunidade(s) validada(s) com "
+            f"líquida real abaixo do valor (apenas MARCADAS; seguem no XLSX, o postprocess classifica): {names}")
+    return list(opps), marked
 
 
 def _liquid_label(opp: "Opportunity", hub_fee_rate: float) -> tuple:
@@ -4978,7 +4989,8 @@ def parse_args():
                          f"há ≤ {VALIDATION_RESUME_MAX_AGE_H}h com a MESMA oferta e a MESMA referência; linha "
                          "reaproveitada sai marcada. Sem a flag, todo run valida do zero."))
     p.add_argument("--min-net-margin", type=float, default=0.0,
-                   help="v2.0: filtra apenas oportunidades com margem liq REAL >= X apos validacao. Ex: 0.20 = so 20%% liq+")
+                   help="B1c: SÓ MARCA (log + contador) as validadas com margem liq REAL < X; NÃO remove nenhuma "
+                        "linha — o corte é único e fica no postprocess. Ex: 0.20")
     p.add_argument("--shipping-brl", type=float, default=0.0,
                    help="Frete fixo per-listing em BRL (default 0 — modelo de "
                         "consolidacao no Hub depot, frete dilui per-card). "
@@ -5427,7 +5439,7 @@ def main():
         # só o corte --min-net-margin (explícito) remove, e é logado.
         before = len(opps)
         opps, cut = apply_validation_filters(opps, args.min_net_margin)
-        scanner.stats["opps_descartadas_min_net"] = len(cut)
+        scanner.stats["opps_marcadas_min_net"] = len(cut)
 
         # M2 fix (2026-05-11): sempre re-ordena por margem líq REAL desc
         # quando houve validação, não só quando min_net_margin > 0.

@@ -81,8 +81,8 @@ def test_canonical_values_present_in_every_scan_command():
     scan_cmds = [f for f in fences if "cardtrader_scanner.py" in f]
     assert len(scan_cmds) == 6, "esperava exatamente os 6 comandos de grupo"
     for cmd in scan_cmds:
-        for flag in ("--threshold 0.30",
-                     "--min-net-margin 0.20", "--max-consecutive-misses 40"):
+        assert "--min-net-margin" not in cmd, f"B1c: o scanner nao corta por margem: {cmd}"
+        for flag in ("--threshold 0.30", "--max-consecutive-misses 40"):
             assert flag in cmd, f"comando sem o valor canônico {flag!r}: {cmd}"
         # decisão do operador (Lote 3): validar TODAS — o canônico não limita
         assert "--validate-top" not in cmd, f"canônico não pode limitar a validação: {cmd}"
