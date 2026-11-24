@@ -135,4 +135,28 @@ def test_default_provider_is_tcgcsv_and_fallback_flag_help_tells_the_truth(monke
         _parse_scanner(monkeypatch, ["--help"])
     out = " ".join(capsys.readouterr().out.split())
     help_txt = out[out.rindex("--no-tcgcsv-fallback"):][:900]
-    assert "só vale com --provider pokemontcg" in help_txt.lower() and "inócuo" in help_txt
+    assert "só vale com --provider pokemontcg" in help_txt.lower() and "inócua" in help_txt
+
+
+# ───────── (7) "Margem % REAL" e "Margem % (scan)" ambas vazias: recalcula por ct_economics, nunca fica NaN ─────────
+def test_row_with_both_gross_margin_columns_empty_is_recomputed_from_prices():
+    from test_p1_postprocess import _raw
+    raw = _raw(**{"LIVE R$ (real)": 60.0, "TCG Market (BRL)": 100.0, "Margem % REAL": float("nan"),
+                  "Margem % (scan)": float("nan")})
+    df = pp.enrich_df(raw)
+    assert df["net_margin"].iloc[0] == pytest.approx(0.40)
+    assert df["margin_source"].iloc[0] == "recomputed"
+
+
+def test_row_without_prices_goes_to_sem_preco_with_a_reason_never_vanishes():
+    from test_p1_postprocess import _raw
+    raw = _raw(**{"LIVE R$ (real)": float("nan"), "Scan R$ (raw)": float("nan"), "Margem % REAL": float("nan"),
+                  "Margem % (scan)": float("nan")})
+    df = pp.enrich_df(raw)
+    assert pd.isna(df["net_margin"].iloc[0]) and df["margin_source"].iloc[0] == "sem_margem"
+    assert str(df["sem_margem_motivo"].iloc[0]).strip()
+    cfg = pp.DecisionConfig()
+    d, why = pp.classify_decision(df.iloc[0], cfg)
+    assert d == "SEM REF" and why
+    md = pp.build_delivery_markdown(df, cfg, fx_usd_brl=5.0)
+    assert "Sem referência" in md or "Sem preço" in md
