@@ -594,7 +594,7 @@ CT_SET_TO_TCGCSV_GROUP_IDS: dict[str, tuple[int, ...]] = {
     "und": (1403,),  # Undaunted
     "tri": (1381,),  # Triumphant
     "clo": (1415,),  # Call of Legends (abbr CL compartilhada)
-    "pdp": (1421,),  # Diamond and Pearl Promos (abbr PR compartilhada)
+    "dpbsp": (1421,),  # DP Black Star Promos (CT id 1517; abbr PR compartilhada)
     "dp": (1430,),  # Diamond and Pearl
     "mt": (1368,),  # Mysterious Treasures
     "sw": (1380,),  # Secret Wonders
@@ -1847,9 +1847,12 @@ class PokemonTcgIoProvider(PricingProvider):
         "df":    ["ex15"],        # Dragon Frontiers
         "pk":    ["ex16"],        # Power Keepers
         # Diamond & Pearl era
+        "dp":    ["dp1"],         # Diamond & Pearl base
         "mt":    ["dp2"],         # Mysterious Treasures
         "sw":    ["dp3"],         # Secret Wonders
         "ge":    ["dp4"],         # Great Encounters
+        "md":    ["dp5"],         # Majestic Dawn
+        "la":    ["dp6"],         # Legends Awakened
         # (removido no Lote 2: dp6 = Legends Awakened, não WCD 2010 — sets/en.json)
         "sft":   ["dp7"],         # Stormfront
         # Platinum
@@ -1857,6 +1860,7 @@ class PokemonTcgIoProvider(PricingProvider):
         "rr":    ["pl2"],         # Rising Rivals
         "prr":   ["pl2"],         # Pre-release Rising Rivals
         "sv":    ["pl3"],         # Supreme Victors (CT 'sv' — NOT Scarlet & Violet!)
+        "ar":    ["pl4"],         # Arceus (CT "Platinum Arceus")
         # HeartGold & SoulSilver
         "hgs":   ["hgss1"],       # HeartGold & SoulSilver base
         "ul":    ["hgss2"],       # Unleashed
@@ -1920,7 +1924,7 @@ class PokemonTcgIoProvider(PricingProvider):
         "slg":   ["sm35"],        # Shining Legends
         "drm":   ["sm75"],        # Dragon Majesty
         "hif":   ["sm115"],       # Hidden Fates
-        "pdp":   ["dp1"],         # Promo DP
+        "dpbsp": ["dpp"],         # DP Black Star Promos (CT 1517)
         # McDonald's promos (trivial 1-to-1)
         "mc11":  ["mcd11"],
         "mc12":  ["mcd12"],

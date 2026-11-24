@@ -468,7 +468,8 @@ def test_run_summary_shows_priced_fraction_and_flags_below_half(tmp_path, monkey
 
 
 # ───────────── 7: nota de calibração ─────────────────────────────────────────
-def test_docs_carry_the_calibration_note():
+def test_docs_carry_the_measured_times_note():
     for rel in ("CLAUDE.md", ".claude/commands/scan.md"):
         txt = (REPO_ROOT / rel).read_text(encoding="utf-8")
-        assert "30 validações" in txt and "remedida" in txt, rel
+        # a nota antiga ("calibrada com 30 validações / remedida") foi trocada pelos tempos medidos
+        assert "2026-11-24" in txt and "pokemontcg" in txt, rel
